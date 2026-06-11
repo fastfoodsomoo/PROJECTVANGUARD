@@ -1,0 +1,15 @@
+# Compiled binaries
+my_server
+sentinel
+
+# Runtime logs
+server_log.txt
+
+# Editor & OS files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
