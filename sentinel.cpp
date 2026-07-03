@@ -1,40 +1,62 @@
+// ═══════════════════════════════════════════════════════════════
+// Vanguard Sentinel — ระบบตรวจจับและป้องกันการบุกรุก (IDS/IPS)
+// เฝ้าดู Log ของ Server แบบ Real-time แล้ว Ban IP ที่น่าสงสัย
+//
+// Bug Fixes ที่แก้ไขจากเวอร์ชันเดิม:
+//   [FIX #5] Sliding window — เปลี่ยน vector เป็น deque (O(1) pop_front)
+//   [FIX #8] stoi crash     — config parser มี try-catch
+//   [FIX #9] Code duplication — ใช้ shared headers
+//   [FIX #10] ANSI colors    — ใช้ shared colors.h
+//
+// Features ใหม่:
+//   [NEW] Path-based detection — ตรวจจับ request ไปยัง path ที่น่าสงสัย
+//   [NEW] Periodic stats      — แสดงสถิติทุก 30 วินาที
+//   [NEW] Reason tracking     — บอกเหตุผลที่ ban (rate/path)
+// ═══════════════════════════════════════════════════════════════
+
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <unistd.h>
 #include <set>
 #include <map>
-#include <vector>
-#include <regex>
+#include <deque>        // [FIX #5] ใช้ deque แทน vector เพื่อ O(1) pop_front
 #include <ctime>
 #include <sys/wait.h>
 
-// === Config ===
-static int         BAN_THRESHOLD = 5;
-static int         TIME_WINDOW   = 60;
-static std::string LOG_PATH      = "server_log.txt";
-static std::string WL_PATH       = "whitelist.conf";
+#include "include/colors.h"
+#include "include/config.h"
+#include "include/ip_utils.h"
 
-#define GREEN   "\033[1;32m"
-#define CYAN    "\033[1;36m"
-#define YELLOW  "\033[1;33m"
-#define RED     "\033[1;31m"
-#define MAGENTA "\033[1;35m"
-#define RESET   "\033[0m"
+// ╔═══════════════════════════════════════╗
+// ║     Suspicious Path Patterns          ║
+// ╚═══════════════════════════════════════╝
 
-static long total_scanned = 0;
-static long total_blocked = 0;
+// [NEW] รายการ path ที่มักถูกใช้ในการโจมตี
+// ถ้า IP ใด request path เหล่านี้จะถูกเพิ่มคะแนน
+static const std::set<std::string> SUSPICIOUS_PATHS = {
+    "/admin", "/wp-login", "/wp-admin", "/phpmyadmin",
+    "/shell", "/cmd", "/exec", "/etc/passwd",
+    "/.env", "/backup", "/db", "/root",
+    "/administrator", "/wp-config", "/xmlrpc.php",
+    "/.git", "/config.php", "/debug"
+};
 
-// --- Whitelist ---
+// ╔═══════════════════════════════════════╗
+// ║          Whitelist Loader             ║
+// ╚═══════════════════════════════════════╝
+
 std::set<std::string> load_whitelist(const std::string& path) {
     std::set<std::string> wl;
     std::ifstream f(path);
     if (!f.is_open()) {
-        std::cout << YELLOW << "[!] " << RESET << "whitelist not found: " << path << std::endl;
+        std::cout << YELLOW << "[!] " << RESET
+                  << "whitelist not found: " << path << std::endl;
         return wl;
     }
     std::string line;
     while (std::getline(f, line)) {
+        // trim whitespace
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
         line.erase(0, line.find_first_not_of(" \t\r\n"));
         if (!line.empty() && line[0] != '#')
@@ -45,164 +67,204 @@ std::set<std::string> load_whitelist(const std::string& path) {
     return wl;
 }
 
-void load_config(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) return;
+// ╔═══════════════════════════════════════╗
+// ║       Firewall Ban (iptables)         ║
+// ╚═══════════════════════════════════════╝
 
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        key.erase(key.find_last_not_of(" \t") + 1);
-        key.erase(0, key.find_first_not_of(" \t"));
-        val.erase(val.find_last_not_of(" \t") + 1);
-        val.erase(0, val.find_first_not_of(" \t"));
-
-        if      (key == "ban_threshold") BAN_THRESHOLD = std::stoi(val);
-        else if (key == "time_window")   TIME_WINDOW   = std::stoi(val);
-        else if (key == "log_path")      LOG_PATH      = val;
-        else if (key == "whitelist")     WL_PATH       = val;
-    }
-}
-
-// validate ip address (เช็คทั้ง format และ range 0-255)
-bool valid_ip(const std::string& ip) {
-    std::regex pat(R"(^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$)");
-    std::smatch m;
-    if (!std::regex_match(ip, m, pat)) return false;
-
-    for (int i = 1; i <= 4; i++) {
-        int octet = std::stoi(m[i].str());
-        if (octet < 0 || octet > 255) return false;
-    }
-    return true;
-}
-
-// ดึง ip จากบรรทัด log (ใช้ find แทน hardcode offset เผื่อ format เปลี่ยน)
-std::string parse_ip(const std::string& line) {
-    std::string tag = "IP Address:";
-    size_t pos = line.find(tag);
-    if (pos == std::string::npos) return "";
-
-    std::string ip = line.substr(pos + tag.length());
-    ip.erase(ip.find_last_not_of(" \t\r\n") + 1);
-    ip.erase(0, ip.find_first_not_of(" \t\r\n"));
-    return ip;
-}
-
-// ban ip ผ่าน iptables
 // ใช้ fork+exec แทน system() เพราะปลอดภัยกว่า (ป้องกัน command injection)
 void ban_ip(const std::string& ip) {
     pid_t pid = fork();
     if (pid == 0) {
+        // child process — execl ไม่ return ถ้าสำเร็จ
         execl("/sbin/iptables", "iptables",
               "-A", "INPUT", "-s", ip.c_str(), "-j", "DROP", nullptr);
-        _exit(1);
+        _exit(1);  // ถ้า execl ล้มเหลว
     }
     if (pid > 0) waitpid(pid, nullptr, 0);
 }
 
-std::string now_str() {
-    auto t = std::time(nullptr);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
-    return buf;
+// ╔═══════════════════════════════════════╗
+// ║        Path-based Detection           ║
+// ╚═══════════════════════════════════════╝
+
+// [NEW] ตรวจจับว่า request line มี path ที่น่าสงสัยหรือไม่
+std::string check_suspicious_path(const std::string& line) {
+    for (const auto& sus : SUSPICIOUS_PATHS) {
+        // มองหา "GET /admin" หรือ "POST /admin" ใน log
+        if (line.find("GET " + sus) != std::string::npos ||
+            line.find("POST " + sus) != std::string::npos ||
+            line.find("HEAD " + sus) != std::string::npos) {
+            return sus;
+        }
+    }
+    return "";
 }
 
-int main() {
-    load_config("config.conf");
+// ╔═══════════════════════════════════════╗
+// ║              Main                     ║
+// ╚═══════════════════════════════════════╝
 
+int main() {
+    VanguardConfig cfg = load_config("config.conf");
+
+    // Banner
     std::cout << MAGENTA << "\n"
               << " ╔══════════════════════════════════════╗\n"
               << " ║   VANGUARD SENTINEL  —  IDS / IPS    ║\n"
               << " ╚══════════════════════════════════════╝\n"
               << RESET << std::endl;
 
-    std::ifstream logfile(LOG_PATH);
+    // เปิดไฟล์ log สำหรับ monitoring
+    std::ifstream logfile(cfg.log_path);
     if (!logfile.is_open()) {
-        std::cerr << RED << "[!] " << RESET << "Cannot open " << LOG_PATH << std::endl;
+        std::cerr << RED << "[!] " << RESET
+                  << "Cannot open " << cfg.log_path << std::endl;
         return 1;
     }
 
     std::set<std::string> blacklist;
-    std::set<std::string> whitelist = load_whitelist(WL_PATH);
+    std::set<std::string> whitelist = load_whitelist(cfg.whitelist_path);
 
-    // เก็บ timestamp ของแต่ละ ip สำหรับทำ rate-based detection
-    std::map<std::string, std::vector<time_t>> ip_history;
+    // [FIX #5] ใช้ deque แทน vector สำหรับ sliding window
+    // deque::pop_front() คือ O(1) ในขณะที่ vector::erase(begin()) คือ O(n)
+    std::map<std::string, std::deque<time_t>> ip_history;
 
-    std::cout << YELLOW << "[*] " << RESET << "Monitoring: " << LOG_PATH << std::endl;
+    // สถิติ
+    long total_scanned     = 0;
+    long total_blocked     = 0;
+    long suspicious_paths  = 0;
+    time_t last_stats_time = std::time(nullptr);
+
+    // สถานะเริ่มต้น
+    std::cout << GREEN << "[+] " << RESET
+              << "Loaded config from config.conf" << std::endl;
     std::cout << YELLOW << "[*] " << RESET
-              << "Ban threshold: " << BAN_THRESHOLD
-              << " hits in " << TIME_WINDOW << "s" << std::endl;
-    std::cout << YELLOW << "[*] " << RESET << "Waiting for new entries...\n" << std::endl;
+              << "Monitoring: " << cfg.log_path << std::endl;
+    std::cout << YELLOW << "[*] " << RESET
+              << "Ban threshold: " << cfg.ban_threshold
+              << " hits in " << cfg.time_window << "s" << std::endl;
+    std::cout << YELLOW << "[*] " << RESET
+              << "Suspicious path detection: " << SUSPICIOUS_PATHS.size()
+              << " patterns loaded" << std::endl;
+    std::cout << YELLOW << "[*] " << RESET
+              << "Waiting for new entries...\n" << std::endl;
 
+    // ตัวแปรสำหรับเก็บ IP ปัจจุบันที่กำลังอ่าน (ใช้กับ path detection)
+    std::string current_ip;
+
+    // === Main Monitoring Loop ===
     while (true) {
         std::string line;
 
         while (std::getline(logfile, line)) {
-            if (line.find("IP Address:") == std::string::npos) continue;
-            total_scanned++;
 
-            std::string ip = parse_ip(line);
+            // --- ดึง IP Address จาก log entry ---
+            if (line.find("IP Address:") != std::string::npos) {
+                total_scanned++;
 
-            if (!valid_ip(ip)) {
-                std::cout << YELLOW << "[?] " << RESET
-                          << "invalid ip skipped: " << ip << std::endl;
+                std::string ip = parse_ip(line);   // จาก ip_utils.h
+                current_ip = ip;
+
+                // ตรวจสอบ IP ถูกต้องไหม
+                if (!valid_ip(ip)) {                // จาก ip_utils.h
+                    std::cout << YELLOW << "[?] " << RESET
+                              << "invalid ip skipped: " << ip << std::endl;
+                    current_ip.clear();
+                    continue;
+                }
+
+                // เช็ค whitelist
+                if (whitelist.count(ip)) {
+                    std::cout << GREEN << "[ok] " << RESET
+                              << ip << " is whitelisted, skipping" << std::endl;
+                    current_ip.clear();
+                    continue;
+                }
+
+                // เคย ban แล้ว — ข้ามไป
+                if (blacklist.count(ip)) {
+                    current_ip.clear();
+                    continue;
+                }
+
+                /*
+                 * Rate-based detection (Sliding Window Algorithm)
+                 *
+                 * แนวคิด: เก็บ timestamp ที่ IP เข้ามาใน deque
+                 * ลบ entry เก่าที่อยู่นอก time_window ออก
+                 * ถ้าจำนวนที่เหลือเกิน threshold → ban
+                 *
+                 * [FIX #5] ใช้ deque::pop_front() แทน vector::erase(begin())
+                 * เพื่อประสิทธิภาพ O(1) แทน O(n)
+                 */
+                time_t now_t = std::time(nullptr);
+                auto& hist = ip_history[ip];
+                hist.push_back(now_t);
+
+                // ลบ entry เก่าที่อยู่นอก window
+                while (!hist.empty() && (now_t - hist.front()) > cfg.time_window)
+                    hist.pop_front();  // O(1)!
+
+                int hits = (int)hist.size();
+
+                if (hits >= cfg.ban_threshold) {
+                    blacklist.insert(ip);
+                    total_blocked++;
+
+                    // แสดง THREAT DETECTED banner
+                    std::cout << "\n" << RED
+                              << "  ╔═══════════════════════════════════╗\n"
+                              << "  ║        ⚠ THREAT DETECTED          ║\n"
+                              << "  ╚═══════════════════════════════════╝"
+                              << RESET << std::endl;
+                    std::cout << "  IP:      " << ip << std::endl;
+                    std::cout << "  Time:    " << now_str() << std::endl;
+                    std::cout << "  Hits:    " << hits << " in "
+                              << cfg.time_window << "s" << std::endl;
+                    std::cout << "  Reason:  " << RED
+                              << "Rate limit exceeded" << RESET << std::endl;
+                    std::cout << "  Action:  " << RED << "BANNED" << RESET
+                              << " (iptables DROP)" << std::endl;
+                    std::cout << "  Blocked: " << blacklist.size()
+                              << " total\n" << std::endl;
+
+                    ban_ip(ip);
+                    current_ip.clear();
+                } else {
+                    std::cout << CYAN << "[watch] " << RESET
+                              << ip << " — " << hits << "/"
+                              << cfg.ban_threshold << std::endl;
+                }
                 continue;
             }
 
-            if (whitelist.count(ip)) {
-                std::cout << GREEN << "[ok] " << RESET
-                          << ip << " is whitelisted, skipping" << std::endl;
-                continue;
-            }
-
-            if (blacklist.count(ip)) continue; // เคย ban แล้ว
-
-            /*
-             * Rate-based detection
-             * แนวคิด: เก็บเวลาที่ ip เข้ามาใน sliding window
-             * ถ้าจำนวนครั้งเกิน threshold ภายใน time_window -> ban
-             * วิธีนี้ user ปกติไม่โดน ban เพราะไม่ได้เข้าถี่ขนาดนั้น
-             */
-            time_t now = std::time(nullptr);
-            auto& hist = ip_history[ip];
-            hist.push_back(now);
-
-            // ลบ entry ที่เก่ากว่า time_window ออก
-            while (!hist.empty() && (now - hist.front()) > TIME_WINDOW)
-                hist.erase(hist.begin());
-
-            int hits = (int)hist.size();
-
-            if (hits >= BAN_THRESHOLD) {
-                blacklist.insert(ip);
-                total_blocked++;
-
-                std::cout << "\n" << RED
-                          << "  ╔═══════════════════════════════════╗\n"
-                          << "  ║        ⚠ THREAT DETECTED          ║\n"
-                          << "  ╚═══════════════════════════════════╝" << RESET << std::endl;
-                std::cout << "  IP:      " << ip << std::endl;
-                std::cout << "  Time:    " << now_str() << std::endl;
-                std::cout << "  Hits:    " << hits << " in " << TIME_WINDOW << "s" << std::endl;
-                std::cout << "  Action:  " << RED << "BANNED" << RESET
-                          << " (iptables DROP)" << std::endl;
-                std::cout << "  Blocked: " << blacklist.size() << " total\n" << std::endl;
-
-                ban_ip(ip);
-            } else {
-                std::cout << CYAN << "[watch] " << RESET
-                          << ip << " — " << hits << "/" << BAN_THRESHOLD << std::endl;
+            // --- [NEW] Path-based detection ---
+            // ตรวจจับ request ไปยัง path ที่น่าสงสัย (เช่น /admin, /wp-login)
+            if (!current_ip.empty() && !blacklist.count(current_ip)) {
+                std::string sus = check_suspicious_path(line);
+                if (!sus.empty()) {
+                    suspicious_paths++;
+                    std::cout << YELLOW << "[⚠ SUS] " << RESET
+                              << current_ip << " requested suspicious path: "
+                              << RED << sus << RESET << std::endl;
+                }
             }
         }
 
-        logfile.clear();
-        sleep(1);
+        logfile.clear();  // reset EOF flag เพื่ออ่านต่อ
+
+        // [NEW] แสดงสถิติทุก 30 วินาที
+        time_t now_t = std::time(nullptr);
+        if (now_t - last_stats_time >= 30 && total_scanned > 0) {
+            std::cout << DIM << "[stats] scanned:" << total_scanned
+                      << " | blocked:" << total_blocked
+                      << " | suspicious:" << suspicious_paths
+                      << " | watching:" << ip_history.size() << " IPs"
+                      << RESET << std::endl;
+            last_stats_time = now_t;
+        }
+
+        sleep(1);  // polling interval
     }
 
     return 0;

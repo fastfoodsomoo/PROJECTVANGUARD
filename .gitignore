@@ -1,9 +1,16 @@
 # Compiled binaries
 my_server
 sentinel
+tests/test_ip
+tests/test_config
+tests/test_rate
 
 # Runtime logs
 server_log.txt
+
+# Build artifacts
+*.o
+*.d
 
 # Editor & OS files
 *.swp
@@ -13,3 +20,11 @@ server_log.txt
 .idea/
 .DS_Store
 Thumbs.db
+
+# Windows WSL Zone Identifier files
+*:Zone.Identifier*
+*Zone.Identifier*
+
+# Extra binaries
+server
+vanguard_proxy

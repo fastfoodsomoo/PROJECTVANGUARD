@@ -1,21 +1,16 @@
-// ═══════════════════════════════════════════════════════════════
-// Vanguard — HTTP Server แบบ Multi-threaded
-// เขียนด้วย C++17 บน POSIX Sockets ตั้งแต่ต้น ไม่ใช้ framework
+// ═══════════════════════════════════════════════════════════════════════
+// Vanguard — Backend Web Server (Private)
+// ฟังเฉพาะ 127.0.0.1:3000 — ไม่เปิดรับจากภายนอกโดยตรง
+// ทุก request ต้องผ่าน vanguard_proxy (port 8080) ก่อน
 //
-// Bug Fixes ที่แก้ไขจากเวอร์ชันเดิม:
-//   [FIX #1] Race Condition  — ใช้ Logger class ที่มี mutex
-//   [FIX #3] inet_ntoa       — เปลี่ยนเป็น inet_ntop (thread-safe)
-//   [FIX #4] Graceful shutdown — ใช้ atomic<bool> แทน exit(0)
-//   [FIX #8] stoi crash      — config parser มี try-catch
-//   [FIX #9] Code duplication — ใช้ shared headers
+// Features:
+//   • Bind เฉพาะ loopback (127.0.0.1) เท่านั้น
+//   • Log incoming headers เพื่อยืนยันว่า proxy inject headers สำเร็จ
+//   • Dark theme HTML pages (เหมือน v1)
+//   • Routes: / | /VANGUARD | /stats
 //
-// Features ใหม่:
-//   [NEW] 404 Not Found page
-//   [NEW] 405 Method Not Allowed
-//   [NEW] /stats endpoint (JSON)
-//   [NEW] Server header ใน response
-//   [NEW] HTML ที่สวยขึ้น (modern dark UI)
-// ═══════════════════════════════════════════════════════════════
+// by Sattaya — Project Vanguard v2
+// ═══════════════════════════════════════════════════════════════════════
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -29,32 +24,66 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <string>
 
 #include "include/colors.h"
-#include "include/config.h"
-#include "include/logger.h"
+
+// ╔═══════════════════════════════════════╗
+// ║         Configuration                 ║
+// ╚═══════════════════════════════════════╝
+
+static constexpr int         BACKEND_PORT = 3000;
+static constexpr const char* BIND_ADDR    = "127.0.0.1";
 
 // ╔═══════════════════════════════════════╗
 // ║          Global State                 ║
 // ╚═══════════════════════════════════════╝
 
-static VanguardConfig g_cfg;
-static int            server_fd = -1;
-static std::atomic<bool> running{true};       // [FIX #4] ใช้ flag แทน exit()
-static std::atomic<int>  active_threads{0};
-static std::atomic<long> total_requests{0};
-static Logger*           g_logger = nullptr;
+static int                server_fd = -1;
+static std::atomic<bool>  running{true};
+static std::atomic<int>   active_threads{0};
+static std::atomic<long>  total_requests{0};
 static std::chrono::steady_clock::time_point start_time;
+static std::mutex         cout_mtx;
+
+// ╔═══════════════════════════════════════╗
+// ║       Time Utility                    ║
+// ╚═══════════════════════════════════════╝
+
+static std::string now_str() {
+    auto t = std::time(nullptr);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+    return buf;
+}
+
+// ╔═══════════════════════════════════════╗
+// ║       Header Extractor                ║
+// ╚═══════════════════════════════════════╝
+
+// ดึงค่า header จาก raw HTTP request
+static std::string get_header(const std::string& request,
+                               const std::string& name) {
+    std::string search = name + ": ";
+    auto pos = request.find(search);
+    if (pos == std::string::npos) return "";
+    pos += search.size();
+    auto end = request.find("\r\n", pos);
+    if (end == std::string::npos) return request.substr(pos);
+    return request.substr(pos, end - pos);
+}
 
 // ╔═══════════════════════════════════════╗
 // ║       HTML Page Generator             ║
 // ╚═══════════════════════════════════════╝
 
 // สร้างหน้า HTML แบบ modern dark UI พร้อม animation
-// ใช้ CSS variables เพื่อเปลี่ยน theme ตาม status
-std::string make_page(const std::string& title, const std::string& emoji,
-                      const std::string& heading, const std::string& subtitle,
-                      const std::string& status_text, bool is_ok) {
+static std::string make_page(const std::string& title,
+                              const std::string& emoji,
+                              const std::string& heading,
+                              const std::string& subtitle,
+                              const std::string& status_text,
+                              bool is_ok) {
     std::string status_class = is_ok ? "online" : "error";
     std::string pulse_class  = is_ok ? "green"  : "red";
 
@@ -115,7 +144,7 @@ std::string make_page(const std::string& title, const std::string& emoji,
         "<span class=\"status " + status_class + "\">"
         "<span class=\"pulse " + pulse_class + "\"></span>"
         + status_text + "</span>"
-        "<p class=\"footer\">Vanguard Server v1.0 &middot; Built with C++ &middot; by Sattaya</p>"
+        "<p class=\"footer\">Vanguard Backend v2.0 &middot; Built with C++ &middot; by Sattaya</p>"
         "</div></body></html>";
 }
 
@@ -123,33 +152,31 @@ std::string make_page(const std::string& title, const std::string& emoji,
 // ║       HTTP Response Builder           ║
 // ╚═══════════════════════════════════════╝
 
-// สร้าง HTTP response พร้อม headers ที่ถูกต้อง
-std::string http_response(int code, const std::string& status,
-                          const std::string& content_type,
-                          const std::string& body) {
+static std::string http_response(int code, const std::string& status,
+                                  const std::string& content_type,
+                                  const std::string& body) {
     std::ostringstream resp;
     resp << "HTTP/1.1 " << code << " " << status << "\r\n"
          << "Content-Type: " << content_type << "\r\n"
          << "Content-Length: " << body.size() << "\r\n"
-         << "Server: Vanguard/1.0\r\n"
+         << "Server: Vanguard-Backend/2.0\r\n"
          << "Connection: close\r\n\r\n"
          << body;
     return resp.str();
 }
 
 // ╔═══════════════════════════════════════╗
-// ║      Signal Handler (Ctrl+C)          ║
+// ║       Signal Handler (Ctrl+C)         ║
 // ╚═══════════════════════════════════════╝
 
-// [FIX #4] ใช้ running flag แทนการเรียก exit(0) ตรง ๆ
-// เพื่อให้ threads ที่กำลังทำงานอยู่สามารถจบได้อย่างสะอาด
 void signal_handler(int) {
     std::cout << "\n" << YELLOW << "[*] " << RESET
-              << "Shutting down gracefully... ("
-              << total_requests.load() << " requests served)" << std::endl;
+              << "Shutting down backend... ("
+              << total_requests.load() << " requests served)"
+              << std::endl;
     running.store(false);
     if (server_fd != -1) {
-        shutdown(server_fd, SHUT_RDWR);  // ปลุก accept() ที่ค้างอยู่
+        shutdown(server_fd, SHUT_RDWR);
         close(server_fd);
         server_fd = -1;
     }
@@ -159,11 +186,11 @@ void signal_handler(int) {
 // ║       Client Handler (per thread)     ║
 // ╚═══════════════════════════════════════╝
 
-void handle_client(int sock, std::string ip) {
+void handle_client(int sock) {
     active_threads++;
     long reqnum = ++total_requests;
 
-    // รับ request จาก client (มี timeout จาก setsockopt)
+    // รับ request
     char buffer[4096] = {0};
     int n = recv(sock, buffer, sizeof(buffer) - 1, 0);
     if (n <= 0) {
@@ -171,82 +198,90 @@ void handle_client(int sock, std::string ip) {
         active_threads--;
         return;
     }
-    buffer[n] = '\0';  // null-terminate เอง เพราะ recv ไม่ทำให้
+    buffer[n] = '\0';
 
     std::string request(buffer);
     std::string ts = now_str();
 
-    // แสดงใน console
-    std::cout << CYAN << "[#" << reqnum << "] " << RESET
-              << GREEN << ip << RESET << " at " << ts << std::endl;
+    // ดึง injected headers จาก proxy
+    std::string vanguard_ip = get_header(request, "X-Vanguard-Connecting-IP");
+    std::string ray_id      = get_header(request, "X-Vanguard-Ray-ID");
 
-    // [FIX #1] Thread-safe logging ผ่าน Logger class (มี mutex ข้างใน)
-    g_logger->log(ts, ip, request);
+    // Log incoming request พร้อม injected headers
+    {
+        std::lock_guard<std::mutex> lock(cout_mtx);
+        std::cout << CYAN << "[#" << reqnum << "] " << RESET
+                  << ts;
+        if (!vanguard_ip.empty()) {
+            std::cout << " | client=" << GREEN << vanguard_ip << RESET;
+        }
+        if (!ray_id.empty()) {
+            std::cout << " | ray=" << DIM << ray_id << RESET;
+        }
+        std::cout << std::endl;
+    }
 
-    // แยก HTTP method จาก request line
+    // แยก HTTP method
     std::string method = request.substr(0, request.find(' '));
-
     std::string response;
 
-    // [NEW] ตรวจสอบ HTTP method — ตอบ 405 ถ้าไม่ใช่ GET/HEAD
+    // ── Routing ──
+
     if (method != "GET" && method != "HEAD") {
+        // 405 Method Not Allowed
         std::string body = make_page("405 Method Not Allowed", "🚫",
             "METHOD NOT ALLOWED",
             "Only GET and HEAD methods are supported",
             "Error 405", false);
         response = http_response(405, "Method Not Allowed",
                                  "text/html; charset=utf-8", body);
-        std::cout << YELLOW << "  -> " << RESET << "405 " << method << std::endl;
 
-    // Route: /VANGUARD
     } else if (request.find("GET /VANGUARD") != std::string::npos ||
                request.find("HEAD /VANGUARD") != std::string::npos) {
+        // /VANGUARD
         std::string body = make_page("Vanguard", "🛡️",
             "VANGUARD",
             "Network Security Suite — Active Defense System",
             "Active", true);
         response = http_response(200, "OK",
                                  "text/html; charset=utf-8", body);
-        std::cout << GREEN << "  -> " << RESET << "served /VANGUARD" << std::endl;
 
-    // [NEW] Route: /stats — JSON endpoint สำหรับดูสถานะ server
     } else if (request.find("GET /stats") != std::string::npos ||
                request.find("HEAD /stats") != std::string::npos) {
+        // /stats — JSON endpoint
         auto elapsed = std::chrono::steady_clock::now() - start_time;
-        long uptime = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+        long uptime  = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
 
         std::ostringstream json;
         json << "{\n"
-             << "  \"server\": \"Vanguard/1.0\",\n"
+             << "  \"server\": \"Vanguard-Backend/2.0\",\n"
              << "  \"status\": \"online\",\n"
+             << "  \"bind\": \"" << BIND_ADDR << ":" << BACKEND_PORT << "\",\n"
              << "  \"total_requests\": " << total_requests.load() << ",\n"
              << "  \"active_connections\": " << active_threads.load() << ",\n"
-             << "  \"max_connections\": " << g_cfg.max_connections << ",\n"
              << "  \"uptime_seconds\": " << uptime << "\n"
              << "}";
         response = http_response(200, "OK",
                                  "application/json; charset=utf-8", json.str());
-        std::cout << GREEN << "  -> " << RESET << "served /stats" << std::endl;
 
-    // Route: / (หน้าหลัก)
     } else if (request.find("GET /") != std::string::npos ||
                request.find("HEAD /") != std::string::npos) {
+        // / — Home page
         std::string body = make_page("Vanguard Server", "⚡",
             "SYSTEM ONLINE",
-            "C++ Core Server — Built from scratch with POSIX Sockets",
+            "C++ Backend Server — Protected by Vanguard Edge Proxy",
             "Fully Operational", true);
         response = http_response(200, "OK",
                                  "text/html; charset=utf-8", body);
 
-    // [NEW] 404 Not Found — ทุก path อื่นที่ไม่รู้จัก
     } else {
+        // 404
         std::string body = make_page("404 Not Found", "🔍",
             "NOT FOUND",
             "The requested page could not be found on this server",
             "Error 404", false);
         response = http_response(404, "Not Found",
                                  "text/html; charset=utf-8", body);
-        std::cout << YELLOW << "  -> " << RESET << "404" << std::endl;
     }
 
     send(sock, response.c_str(), response.size(), 0);
@@ -260,113 +295,94 @@ void handle_client(int sock, std::string ip) {
 
 int main() {
     signal(SIGINT, signal_handler);
-    g_cfg = load_config("config.conf");
-    g_logger = new Logger(g_cfg.log_path);
     start_time = std::chrono::steady_clock::now();
 
     // Banner
     std::cout << MAGENTA << "\n"
-              << " ╔══════════════════════════════════════╗\n"
-              << " ║     VANGUARD  —  C++ Core Server     ║\n"
-              << " ╚══════════════════════════════════════╝\n"
+              << " ╔══════════════════════════════════════════════╗\n"
+              << " ║   VANGUARD BACKEND — Private Web Server      ║\n"
+              << " ║   Listening on " << BIND_ADDR << ":" << BACKEND_PORT
+              << " (loopback only)   ║\n"
+              << " ╚══════════════════════════════════════════════╝\n"
               << RESET << std::endl;
-
-    std::cout << GREEN << "[+] " << RESET
-              << "Loaded config from config.conf" << std::endl;
 
     // สร้าง socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
-        std::cerr << RED << "[!] " << RESET << "socket() failed" << std::endl;
-        delete g_logger;
+        std::cerr << RED << "[!] " << RESET
+                  << "socket() failed" << std::endl;
         return 1;
     }
 
-    // SO_REUSEADDR ป้องกันปัญหา "port in use" หลัง restart
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(g_cfg.port);
+    // ── Bind เฉพาะ 127.0.0.1 (ไม่ใช่ INADDR_ANY) ──
+    inet_pton(AF_INET, BIND_ADDR, &addr.sin_addr);
+    addr.sin_port = htons(BACKEND_PORT);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         std::cerr << RED << "[!] " << RESET
-                  << "bind() failed - port " << g_cfg.port << " in use?" << std::endl;
+                  << "bind() failed — port " << BACKEND_PORT << " in use?"
+                  << std::endl;
         close(server_fd);
-        delete g_logger;
         return 1;
     }
-    if (listen(server_fd, 10) < 0) {
-        std::cerr << RED << "[!] " << RESET << "listen() failed" << std::endl;
+
+    if (listen(server_fd, 64) < 0) {
+        std::cerr << RED << "[!] " << RESET
+                  << "listen() failed" << std::endl;
         close(server_fd);
-        delete g_logger;
         return 1;
     }
 
     std::cout << GREEN << "[+] " << RESET
-              << "Listening on port " << g_cfg.port
-              << " (max " << g_cfg.max_connections << " connections)" << std::endl;
+              << "Listening on " << BOLD << BIND_ADDR << ":"
+              << BACKEND_PORT << RESET << " (private)" << std::endl;
     std::cout << GREEN << "[+] " << RESET
               << "Routes: / | /VANGUARD | /stats" << std::endl;
-    std::cout << YELLOW << "[*] " << RESET << "Ctrl+C to shut down\n" << std::endl;
+    std::cout << GREEN << "[+] " << RESET
+              << "Proxy headers: X-Vanguard-Connecting-IP, X-Vanguard-Ray-ID"
+              << std::endl;
+    std::cout << YELLOW << "[*] " << RESET
+              << "Ctrl+C to shut down\n" << std::endl;
 
     // === Main Accept Loop ===
-    // [FIX #4] ใช้ running flag เพื่อปิดอย่างสะอาด
     while (running.load()) {
         struct sockaddr_in cli_addr{};
         socklen_t cli_len = sizeof(cli_addr);
-        int clientsock = accept(server_fd, (struct sockaddr*)&cli_addr, &cli_len);
+        int clientsock = accept(server_fd, (struct sockaddr*)&cli_addr,
+                                &cli_len);
 
         if (clientsock < 0) {
-            if (!running.load()) break;  // ถูก shutdown แล้ว
+            if (!running.load()) break;
             continue;
         }
 
-        // ตั้ง recv timeout กัน client ค้าง
+        // ตั้ง recv timeout
         struct timeval tv;
-        tv.tv_sec = g_cfg.recv_timeout;
+        tv.tv_sec  = 5;
         tv.tv_usec = 0;
         setsockopt(clientsock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-        // [FIX #3] ใช้ inet_ntop แทน inet_ntoa เพราะ thread-safe
-        // inet_ntoa คืน pointer ไปยัง static buffer ที่อาจถูก thread อื่นเขียนทับ
-        char ip_buf[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &cli_addr.sin_addr, ip_buf, sizeof(ip_buf));
-        std::string client_ip(ip_buf);
-
-        // ถ้า thread เต็มก็ reject (กัน DoS)
-        if (active_threads.load() >= g_cfg.max_connections) {
-            std::cerr << RED << "[!] " << RESET
-                      << "Connection limit reached, rejecting " << client_ip << std::endl;
-            std::string body = make_page("503 Service Unavailable", "⏳",
-                "SERVER BUSY",
-                "Too many connections. Please try again later.",
-                "Unavailable", false);
-            std::string resp = http_response(503, "Service Unavailable",
-                                             "text/html; charset=utf-8", body);
-            send(clientsock, resp.c_str(), resp.size(), 0);
-            close(clientsock);
-            continue;
-        }
-
-        std::thread(handle_client, clientsock, client_ip).detach();
+        std::thread(handle_client, clientsock).detach();
     }
 
-    // [FIX #4] Graceful shutdown — รอ threads ที่ยังทำงานอยู่
+    // Graceful shutdown
     if (active_threads.load() > 0) {
         std::cout << YELLOW << "[*] " << RESET
                   << "Waiting for " << active_threads.load()
-                  << " active connections to finish..." << std::endl;
+                  << " active connections..." << std::endl;
         int wait_count = 0;
         while (active_threads.load() > 0 && wait_count < 50) {
-            usleep(100000);  // 100ms
+            usleep(100000);
             wait_count++;
         }
     }
 
-    delete g_logger;
-    std::cout << GREEN << "[+] " << RESET << "Server stopped cleanly." << std::endl;
+    std::cout << GREEN << "[+] " << RESET
+              << "Backend stopped cleanly." << std::endl;
     return 0;
 }
