@@ -1,0 +1,40 @@
+# ── Compiled binaries (will be built inside container) ──
+vanguard_proxy
+my_server
+server
+sentinel
+
+# ── Git ──
+.git
+.github
+.gitignore
+
+# ── Logs & temp ──
+*.txt
+*.log
+
+# ── Tests & scripts (not needed in container) ──
+tests/
+test.sh
+simulate_attack.sh
+unban.sh
+
+# ── Python tooling (not needed in container) ──
+dashboard.py
+vanguard_stress.py
+requirements.txt
+__pycache__/
+*.pyc
+
+# ── Docker files (avoid recursive build context) ──
+docker-compose.yml
+.dockerignore
+Dockerfile
+
+# ── Docs ──
+README.md
+LICENSE
+
+# ── Legacy source (not part of v2 build) ──
+server.cpp
+sentinel.cpp

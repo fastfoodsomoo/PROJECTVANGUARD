@@ -1,410 +1,313 @@
-# 🛡️ Vanguard — ระบบรักษาความปลอดภัยเครือข่ายด้วย C++
+# Vanguard — In-line Reverse Proxy & WAF Engine
 
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?style=flat-square&logo=cplusplus)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange?style=flat-square&logo=linux)
 ![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=flat-square)
 
-HTTP Server แบบ Multi-threaded พร้อมระบบตรวจจับและป้องกันการบุกรุก (IDS/IPS) แบบ Real-time เขียนด้วย **C++17** บน POSIX Sockets ทั้งหมดตั้งแต่ต้น ไม่ใช้ framework ใดๆ
+Reverse Proxy พร้อม Web Application Firewall (WAF) เขียนด้วย **C++17** ตั้งแต่ต้น ทำงานแบบ In-line คล้าย Cloudflare Edge Proxy — ตรวจจับ SQL Injection, XSS, จำกัด Rate ต่อ IP แล้ว forward request ที่ปลอดภัยไปยัง backend
 
 ```
- ╔══════════════════════════════════════╗
- ║     VANGUARD  —  C++ Core Server     ║
- ║         Network Security Suite       ║
- ╚══════════════════════════════════════╝
+ ╔════════════════════════════════════════════════════════╗
+ ║   VANGUARD EDGE PROXY — Cloudflare-like WAF Engine     ║
+ ║   C++17 • epoll • Zero-Copy • In-line Filtering        ║
+ ╚════════════════════════════════════════════════════════╝
 ```
 
-## 📋 สารบัญ
+## สารบัญ
 
-- [ภาพรวมโปรเจกต์](#ภาพรวมโปรเจกต์)
-- [สถาปัตยกรรมระบบ](#สถาปัตยกรรมระบบ)
+- [สถาปัตยกรรม](#สถาปัตยกรรม)
 - [ฟีเจอร์](#ฟีเจอร์)
-- [เทคโนโลยีที่ใช้](#เทคโนโลยีที่ใช้)
-- [วิธีเริ่มต้นใช้งาน](#วิธีเริ่มต้นใช้งาน)
+- [วิธีใช้งาน](#วิธีใช้งาน)
 - [การตั้งค่า](#การตั้งค่า)
 - [หลักการทำงาน](#หลักการทำงาน)
 - [การทดสอบ](#การทดสอบ)
-- [วิธี Bypass / Unban ตัวเอง](#วิธี-bypass--unban-ตัวเอง)
 - [โครงสร้างโปรเจกต์](#โครงสร้างโปรเจกต์)
 - [สิ่งที่ได้เรียนรู้](#สิ่งที่ได้เรียนรู้)
-- [แผนพัฒนาในอนาคต](#แผนพัฒนาในอนาคต)
 - [ผู้พัฒนา](#ผู้พัฒนา)
 
 ---
 
-## ภาพรวมโปรเจกต์
-
-**Vanguard** คือโปรเจกต์ด้านความปลอดภัยเครือข่าย ที่แสดงให้เห็นถึงความเข้าใจในการเขียนโปรแกรมระดับ System Programming:
-
-- **Socket Programming** — สร้าง HTTP Server ตั้งแต่ต้นโดยไม่ใช้ library ภายนอก
-- **Multi-threading** — รองรับ Client หลายคนพร้อมกันอย่างปลอดภัย (Thread-safe logging)
-- **Process Management** — ใช้ `fork()` และ `exec()` ในการสั่งงาน Firewall
-- **Real-time Log Monitoring** — ตรวจสอบ Log ของ Server อย่างต่อเนื่อง
-- **Rate-based Intrusion Detection** — ตรวจจับและบล็อกรูปแบบทราฟฟิกที่น่าสงสัย
-- **Path-based Detection** — ตรวจจับ Request ไปยัง Path ที่อันตราย (เช่น `/admin`, `/wp-login`)
-
-โปรเจกต์นี้ออกแบบมาเพื่อแสดงความเข้าใจด้าน Computer Networking, Operating Systems และ Security Fundamentals
-
----
-
-## สถาปัตยกรรมระบบ
+## สถาปัตยกรรม
 
 ```
-                        ┌─────────────────────┐
-                        │   Client (Browser)  │
-                        └─────────┬───────────┘
-                                  │ HTTP Request
-                                  ▼
-                  ┌───────────────────────────────┐
-                  │        Vanguard Server        │
-                  │         (server.cpp)          │
-                  │                               │
-                  │  ┌──────────┐  ┌────────────┐ │
-                  │  │  Socket  │  │  จัดการ     │ │
-                  │  │  Listener│──│  Thread    │ │
-                  │  └──────────┘  └────────────┘ │
-                  │        │               │      │
-                  │        ▼               ▼      │
-                  │  ┌──────────┐  ┌────────────┐ │  
-                  │  │  แยกวิเค- │  │    สร้าง    │ │
-                  │  │   ราะห์   │  │    HTTP    │ │
-                  │  │  Request │  │  Response  │ │
-                  │  └──────────┘  └────────────┘ │
-                  └───────────┬───────────────────┘
-                              │ บันทึก Log (Thread-safe)
+                       ┌──────────────────┐
+                       │  Client/Attacker │
+                       └────────┬─────────┘
+                                │ HTTP Request
+                                ▼
+              ┌──────────────────────────────────────┐
+              │        vanguard_proxy (Port 8080)     │
+              │        ── Edge Proxy & WAF ──         │
+              │                                      │
+              │  1. Parse HTTP (string_view)          │
+              │  2. WAF: ตรวจ SQLi / XSS patterns    │
+              │     ├─ ตรงกัน → 403 Forbidden        │
+              │     └─ ปลอดภัย → ไปต่อ               │
+              │  3. Rate Limit: Token Bucket per-IP   │
+              │     ├─ เกิน → 429 Too Many Requests  │
+              │     └─ ผ่าน → forward                │
+              │  4. Inject headers:                   │
+              │     X-Vanguard-Connecting-IP           │
+              │     X-Vanguard-Ray-ID                  │
+              │  5. Forward ไป backend                │
+              │  6. รับ response กลับมา               │
+              │  7. Override: Server header            │
+              └───────────────┬──────────────────────┘
+                              │ (ถ้าปลอดภัย)
                               ▼
-                    ┌───────────────────┐
-                    │  server_log.txt   │ ◄── ไฟล์ Log ที่ใช้ร่วมกัน
-                    └─────────┬─────────┘
-                              │ อ่านแบบ Real-time
-                              ▼
-                  ┌────────────────────────────────┐
-                  │      Vanguard Sentinel         │
-                  │       (sentinel.cpp)           │
-                  │                                │
-                  │  ┌──────────┐  ┌────────────┐  │
-<<<<<<< HEAD
-                  │  │  แยกวิเค- │  │  ตรวจจับ    │  │
-                  │  │  ราะห์    │──│  ตาม Rate  │  │
-                  │  │  Log     │  └────────────┘  │
-=======
-                  │  │  แยกวิเค-│  │  ตรวจจับ   │  │
-                  │  │  ราะห์   │──│  ตาม Rate   │  │
-                  │  │  Log     │  │  + Path     │  │
-                  │  │          │  └────────────┘  │
->>>>>>> ec22e6c (Feat: Add Vanguard Proxy engine and clean workspace)
-                  │  └──────────┘         │        │
-                  │        │              ▼        │
-                  │  ┌──────────┐  ┌────────────┐  │
-                  │  │  ตรวจสอบ │  │  สั่ง Ban    │  │
-                  │  │  IP      │  │  (iptables)│  │
-                  │  └──────────┘  └────────────┘  │
-                  └────────────────────────────────┘
+              ┌──────────────────────────────────────┐
+              │        my_server (Port 3000)          │
+              │     ── Backend Web Server ──          │
+              │     Bind: 127.0.0.1 เท่านั้น          │
+              │     ไม่เปิดรับจากภายนอกโดยตรง          │
+              │                                      │
+              │  Routes: / | /VANGUARD | /stats       │
+              │  Log: แสดง injected headers จาก proxy │
+              └──────────────────────────────────────┘
 ```
 
-**ลำดับการทำงาน:**
-1. Client ส่ง HTTP Request มาที่ **Server**
-2. Server บันทึก Request (IP, เวลา, Headers) ลงใน `server_log.txt` ผ่าน **Thread-safe Logger**
-3. **Sentinel** เฝ้าดูไฟล์ Log แบบ Real-time
-4. หาก IP ใดเชื่อมต่อเกินจำนวนที่กำหนด หรือเข้าถึง Path ที่น่าสงสัย จะถูก **Ban ผ่าน iptables** ทันที
+**ก่อนหน้า (v1):** Client → server:8080 → เขียน log ลงดิสก์ → sentinel อ่าน log → iptables ban
+
+**ตอนนี้ (v2):** Client → vanguard_proxy:8080 → ตรวจสอบ in-line ทันที → forward หรือ block
 
 ---
 
 ## ฟีเจอร์
 
-### 🖥️ Server (`server.cpp`)
-| ฟีเจอร์ | รายละเอียด |
-|---------|------------|
-| **Raw Socket HTTP** | สร้าง HTTP Server จากศูนย์ด้วย POSIX `socket()`, `bind()`, `listen()`, `accept()` |
-| **Multi-threaded** | สร้าง Thread ใหม่สำหรับแต่ละ Client เพื่อรองรับการเชื่อมต่อพร้อมกัน |
-| **Thread-safe Logging** | ใช้ `std::mutex` ป้องกัน Race Condition เมื่อ Thread หลายตัวเขียน Log |
-| **จำกัดจำนวน Connection** | ใช้ Atomic Counter จำกัดจำนวน Thread สูงสุดเพื่อป้องกัน DoS |
-| **HTTP Routing** | รองรับ `/`, `/VANGUARD`, `/stats` พร้อม 404 และ 405 |
-| **Stats Endpoint** | `/stats` คืน JSON แสดงสถานะ: requests, connections, uptime |
-| **ตั้งค่าได้** | Port, Timeout, จำนวน Connection สูงสุด อ่านจาก `config.conf` |
-| **ปิดอย่างปลอดภัย** | Graceful Shutdown ด้วย `atomic<bool>` — รอ Thread จบก่อนปิด |
-| **ป้องกัน Buffer Overflow** | จำกัดขนาด Buffer และทำ Null-termination อย่างถูกต้อง |
-| **Modern UI** | หน้า HTML แบบ Dark Theme พร้อม CSS Animation |
+### Edge Proxy / WAF (`vanguard_proxy.cpp`)
 
-### 🔍 Sentinel (`sentinel.cpp`)
 | ฟีเจอร์ | รายละเอียด |
-|---------|------------|
-| **เฝ้าระวังแบบ Real-Time** | ตรวจสอบไฟล์ Log อย่างต่อเนื่องเพื่อหา Entry ใหม่ |
-| **ตรวจจับตาม Rate** | Ban เฉพาะ IP ที่เชื่อมต่อเกิน N ครั้งภายในกรอบเวลาที่กำหนด |
-| **Path-based Detection** | ตรวจจับ Request ไปยัง Path อันตราย (เช่น `/admin`, `/wp-login`) |
-| **ตรวจสอบ IP** | ใช้ Regex ตรวจสอบรูปแบบ IP พร้อมเช็คช่วง 0-255 ทุก Octet |
-| **รองรับ Whitelist** | IP ที่เชื่อถือได้จาก `whitelist.conf` จะไม่ถูก Ban |
-| **สั่ง Firewall อย่างปลอดภัย** | ใช้ `fork()` + `execl()` แทน `system()` ในการสั่ง iptables |
-| **แสดงสถิติ** | แสดง Scan Count, Blocked IPs, Suspicious Paths ทุก 30 วินาที |
-| **Sliding Window ที่มีประสิทธิภาพ** | ใช้ `std::deque` แทน `vector` สำหรับ O(1) pop_front |
+|---------|-----------|
+| **epoll Event Loop** | ใช้ `epoll(7)` กับ non-blocking socket (`O_NONBLOCK`) สำหรับ accept loop ที่รองรับ connection จำนวนมาก |
+| **Zero-Copy HTTP Parsing** | Parse request ด้วย `std::string_view` — ไม่ copy string ระหว่างตรวจสอบ |
+| **Token Bucket Rate Limiter** | จำกัด rate ต่อ IP แบบ in-memory (10 req/s, burst 10) ด้วย `std::unordered_map` + `std::mutex` |
+| **WAF: SQL Injection** | ตรวจจับ 22 patterns เช่น `UNION SELECT`, `' OR '1'='1`, `DROP TABLE` (รวม URL-encoded) |
+| **WAF: XSS** | ตรวจจับ 18 patterns เช่น `<script>`, `javascript:`, `onerror=`, `eval()` |
+| **Reverse Proxy** | Forward request ไป `127.0.0.1:3000` พร้อม inject `X-Vanguard-Connecting-IP` และ `X-Vanguard-Ray-ID` |
+| **Header Override** | แทนที่ `Server:` header ใน response เป็น `Vanguard-Edge-Engine/1.0` |
+| **Whitelist** | IP ใน `whitelist.conf` ข้ามการเช็ค rate limit (แต่ยังผ่าน WAF) |
+| **Custom Block Pages** | หน้า HTML สำหรับ 429, 403, 502 แบบ terminal panel พร้อม Ray ID |
 
-### 🧩 Modular Architecture
-| ส่วนประกอบ | รายละเอียด |
-|-----------|------------|
-| `include/config.h` | Shared config parser — ใช้ร่วมกันทั้ง server และ sentinel |
-| `include/colors.h` | ANSI color constants — ลด code duplication |
-| `include/ip_utils.h` | IP validation & parsing — แยกออกมาเพื่อ unit test |
-| `include/logger.h` | Thread-safe Logger class — ป้องกัน Race Condition |
+### Backend Server (`my_server.cpp`)
+
+| ฟีเจอร์ | รายละเอียด |
+|---------|-----------|
+| **Private Binding** | Bind เฉพาะ `127.0.0.1:3000` — ไม่เปิดรับ connection จากภายนอก |
+| **Header Logging** | แสดง `X-Vanguard-Connecting-IP` และ `X-Vanguard-Ray-ID` ที่ proxy inject มา |
+| **Multi-threaded** | สร้าง thread ใหม่สำหรับแต่ละ request |
+| **HTTP Routing** | รองรับ `/` (หน้าหลัก), `/VANGUARD` (status), `/stats` (JSON), 404, 405 |
+| **Graceful Shutdown** | `Ctrl+C` → รอ thread ที่ทำงานอยู่จบก่อนปิด |
 
 ---
 
-## เทคโนโลยีที่ใช้
-
-| เทคโนโลยี | การใช้งาน |
-|-----------|----------|
-| **C++17** | ภาษาหลัก |
-| **POSIX Sockets** | จัดการ Network I/O (`sys/socket.h`, `netinet/in.h`) |
-| **std::thread** | Multi-threading สำหรับรองรับ Client พร้อมกัน |
-| **std::mutex** | Thread-safe Logging ป้องกัน Race Condition |
-| **std::atomic** | Lock-free counters สำหรับ request count, thread count |
-| **iptables** | Firewall ระดับ Linux Kernel |
-| **fork/exec** | สร้าง Process ลูกอย่างปลอดภัยสำหรับคำสั่งระบบ |
-| **std::regex** | ตรวจสอบรูปแบบ IP Address |
-| **std::deque** | Sliding window algorithm ที่มีประสิทธิภาพ |
-| **GitHub Actions** | CI/CD สำหรับ Build & Test อัตโนมัติ |
-
----
-
-## วิธีเริ่มต้นใช้งาน
+## วิธีใช้งาน
 
 ### สิ่งที่ต้องมี
-- ระบบปฏิบัติการ Linux (หรือ WSL บน Windows)
+
+- Linux (หรือ WSL บน Windows)
 - `g++` ที่รองรับ C++17
 - `make`
-- `iptables` (สำหรับ Sentinel ต้องใช้สิทธิ์ root)
+- `curl` (สำหรับ test)
 
-### การ Build
+### Build
 
 ```bash
-# Clone repository
-git clone https://github.com/your-username/vanguard.git
-cd vanguard
+git clone https://github.com/fastfoodsomoo/PROJECTVANGUARD.git
+cd PROJECTVANGUARD
 
-# Build ทั้ง Server และ Sentinel
-make all
-
-# รัน Unit Tests
-make test-unit
+make clean && make
 ```
 
-### การรัน
+### รัน
+
+ต้องเปิด 2 terminal:
 
 ```bash
-# Terminal 1: เริ่มต้น Server
-make run-server
-# หรือ: ./my_server
+# Terminal 1 — Backend (ต้องเปิดก่อน)
+./my_server
 
-# Terminal 2: เริ่มต้น Sentinel (ต้องใช้สิทธิ์ root สำหรับ iptables)
-make run-sentinel
-# หรือ: sudo ./sentinel
+# Terminal 2 — Edge Proxy / WAF
+./vanguard_proxy
+```
 
-# Terminal 3: ทดสอบด้วย Browser หรือ curl
-curl http://localhost:8080/          # หน้า Default
-curl http://localhost:8080/VANGUARD  # หน้า Vanguard
-curl http://localhost:8080/stats     # JSON Stats
+### ทดสอบ
+
+```bash
+# Terminal 3
+curl http://localhost:8080/                          # หน้าหลัก (ผ่าน proxy)
+curl -I http://localhost:8080/                       # ดู Server header
+curl "http://localhost:8080/?id=1' OR '1'='1"        # ทดสอบ SQLi → 403
+curl "http://localhost:8080/?q=<script>alert(1)</script>"  # ทดสอบ XSS → 403
 ```
 
 ---
 
 ## การตั้งค่า
 
-ตั้งค่าทั้งหมดอยู่ใน [`config.conf`](config.conf):
+### `whitelist.conf`
+
+IP ที่อยู่ในไฟล์นี้จะ**ข้ามการเช็ค rate limit** (แต่ยังต้องผ่าน WAF):
 
 ```conf
-# ตั้งค่า Server
-port            = 8080       # Port ที่ Server จะรับฟัง
-max_connections = 64         # จำนวน Client Thread สูงสุด
-recv_timeout    = 5          # Timeout ในการรับข้อมูล (วินาที)
-log_path        = server_log.txt
+# Vanguard Edge Proxy — Whitelisted IPs
+# 127.0.0.1 ถูก comment ไว้เพื่อให้ test rate limit จาก localhost ได้
+# Uncomment ในเครื่อง production ถ้าต้องการ
 
-# ตั้งค่า Sentinel
-ban_threshold   = 5          # Ban หลังเชื่อมต่อ N ครั้ง...
-time_window     = 60         # ...ภายในเวลากี่วินาที
-whitelist       = whitelist.conf
+# 127.0.0.1
+192.168.1.50
+10.0.0.1
 ```
 
-IP ที่เชื่อถือได้ใส่ใน [`whitelist.conf`](whitelist.conf):
-```
-127.0.0.1
-192.168.1.100
-```
+### Rate Limit (ตั้งค่าใน source code)
 
-> **หมายเหตุ:** Config parser มี error handling — ถ้าค่าไม่ถูกต้อง (เช่น `port = abc`) จะใช้ค่า default แทน โดยไม่ crash
+ค่า default ตั้งไว้ใน `vanguard_proxy.cpp`:
+
+| ค่า | Default | หมายความ |
+|-----|---------|---------|
+| `RATE_TOKENS_S` | 10.0 | เติม 10 tokens ต่อวินาที |
+| `RATE_BURST` | 10.0 | ถังจุได้สูงสุด 10 tokens |
+| `PROXY_PORT` | 8080 | port ที่ proxy ฟัง |
+| `BACKEND_PORT` | 3000 | port ของ backend |
 
 ---
 
 ## หลักการทำงาน
 
-### ลำดับการเชื่อมต่อ
+### Pipeline ทีละขั้น
+
 ```
-Client เชื่อมต่อ  ──►  Server รับ (สร้าง Thread ใหม่)
-                           │
-                           ├── บันทึก: IP + เวลา + Headers (Thread-safe)
-                           ├── Route: / | /VANGUARD | /stats | 404 | 405
-                           └── ส่ง HTTP Response แล้วปิด Socket
-
-ในขณะเดียวกัน...
-
-Sentinel อ่าน Log  ──►  ดึง IP จาก "IP Address:"
-                              │
-                              ├── IP ไม่ถูกต้อง?   → ข้าม
-                              ├── อยู่ใน Whitelist? → ปล่อยผ่าน
-                              ├── Request Path น่าสงสัย? → แจ้งเตือน ⚠
-                              ├── ต่ำกว่า Threshold? → เฝ้าระวัง
-                              └── เกิน Threshold?   → BAN (iptables DROP)
+Request เข้ามา
+    │
+    ▼
+[1] Parse HTTP Request ─── string_view (zero-copy)
+    │                      แยก method, URI, headers, body
+    ▼
+[2] WAF Inspection ─────── ตรวจ URI + body
+    │                      SQLi patterns (22 ตัว)
+    │                      XSS patterns (18 ตัว)
+    │                      case-insensitive + URL-decoded
+    ├─ ตรงกัน → 403 Forbidden (ทันที, ไม่ forward)
+    │
+    ▼
+[3] Rate Limit ─────────── Token Bucket per-IP
+    │                      เช็คว่า IP อยู่ใน whitelist ไหม
+    │                      ถ้าไม่ → ตรวจ token ในถัง
+    ├─ หมด → 429 Too Many Requests
+    │
+    ▼
+[4] Forward to Backend ─── connect() ไป 127.0.0.1:3000
+    │                      inject X-Vanguard-Connecting-IP
+    │                      inject X-Vanguard-Ray-ID
+    │
+    ▼
+[5] รับ Response ───────── อ่าน response จาก backend
+    │                      override Server header
+    │                      ส่งกลับให้ client
+    ▼
+Done
 ```
 
-### อัลกอริทึมตรวจจับตาม Rate (Rate-Based Detection)
-แทนที่จะ Ban ทุก IP ที่ไม่รู้จักทันที Sentinel จะติดตามความถี่ของการเชื่อมต่อ:
+### Token Bucket Rate Limiter
 
-1. เก็บ Timestamp ของการเชื่อมต่อแต่ละ IP ไว้ใน **Sliding Window** (ใช้ `std::deque` สำหรับ O(1) pop_front)
-2. ลบ Entry เก่าที่อยู่นอกกรอบเวลา (`time_window` วินาที) ออก
-3. หากจำนวนภายใน Window เกิน `ban_threshold` → Ban IP นั้น
-4. วิธีนี้ป้องกันการ Ban ผู้ใช้ปกติ ขณะที่ยังจับรูปแบบที่น่าสงสัยได้
+แต่ละ IP มี "ถังเหรียญ" ของตัวเอง:
 
-### Path-based Detection (ใหม่)
-นอกจากการตรวจจับตาม Rate แล้ว Sentinel ยังตรวจจับ Request ที่เข้าถึง Path อันตราย เช่น:
-- `/admin`, `/wp-login`, `/wp-admin` — ช่องทางเข้าผู้ดูแล
-- `/phpmyadmin`, `/.env`, `/config.php` — ไฟล์ configuration
-- `/shell`, `/cmd`, `/exec` — คำสั่งระบบ
+- ถังเริ่มต้นมี `RATE_BURST` (10) เหรียญ
+- ทุก request ใช้ 1 เหรียญ
+- ถังเติมเหรียญ `RATE_TOKENS_S` (10) เหรียญต่อวินาที
+- ถ้าเหรียญหมด → ตอบ 429 ทันที
+- IP ใน whitelist ข้ามขั้นตอนนี้
+
+### WAF Patterns
+
+**SQLi** — ตรวจจับ patterns เหล่านี้ (case-insensitive):
+```
+union select    ' or '1'='1    drop table    ; select
+'; drop         1=1--          select * from  insert into
+delete from     exec(          sleep(         benchmark(
+```
+
+**XSS** — ตรวจจับ patterns เหล่านี้:
+```
+<script         javascript:    onerror=       onload=
+onclick=        alert(         eval(          <iframe
+document.cookie prompt(        confirm(       expression(
+```
+
+ทุก pattern ตรวจทั้งแบบปกติและ URL-encoded (เช่น `%3Cscript`, `%20OR%20`)
 
 ---
 
 ## การทดสอบ
 
-### Unit Tests (C++)
-
-โปรเจกต์มี Unit Test ที่เขียนด้วย C++ สำหรับทดสอบ core logic:
+### Test Suite อัตโนมัติ
 
 ```bash
-# รัน Unit Tests ทั้งหมด
-make test-unit
-```
-
-| Test File | ทดสอบ | จำนวน Test Cases |
-|-----------|--------|-----------------|
-| `tests/test_ip.cpp` | IP Validation (`valid_ip`, `parse_ip`) | 20 cases |
-| `tests/test_config.cpp` | Config Parser (defaults, custom, errors) | 7 cases |
-| `tests/test_rate.cpp` | Rate Detection Algorithm (sliding window) | 9 cases |
-
-### Integration Tests (Shell)
-
-```bash
-# Build แล้วรัน Test Suite
-make test
-
-# หรือรันตรง
-chmod +x test.sh
+# เปิด my_server + vanguard_proxy ก่อน แล้วรัน:
 ./test.sh
 ```
 
-สิ่งที่ Test Suite ทดสอบ:
+สิ่งที่ test:
 
-| ลำดับ | การทดสอบ | รายละเอียด |
-|-------|----------|------------|
-| 1 | หน้า Default | ส่ง GET `/` แล้วเช็คว่าได้ HTTP 200 |
-| 2 | หน้า VANGUARD | ส่ง GET `/VANGUARD` แล้วเช็คว่าได้ HTTP 200 |
-| 3 | Content-Length | ตรวจสอบว่า Response มี Header ที่ถูกต้อง |
-| 4 | Log File | ตรวจสอบว่า `server_log.txt` ถูกเขียน |
-| 5 | Concurrent | ส่ง 5 Request พร้อมกันเพื่อทดสอบ Multi-threading |
-| 6 | Rate Detection | ส่ง 10 Request ติดกันเพื่อ trigger Sentinel |
+| # | การทดสอบ | คาดหวัง |
+|---|---------|---------|
+| 1 | `GET /` ผ่าน proxy → backend | HTTP 200 |
+| 2 | Response header `Server:` | `Vanguard-Edge-Engine/1.0` |
+| 3 | `Content-Length` header | มี |
+| 4 | `GET /VANGUARD` | HTTP 200 |
+| 5 | `GET /stats` | JSON ที่มี `"status"` |
+| 6 | SQLi payload `' OR '1'='1` | HTTP 403 |
+| 7 | XSS payload `<script>` | HTTP 403 |
+| 8 | 20 requests รวด | HTTP 429 (หลัง burst หมด) |
+| 9 | 5 concurrent requests | ไม่ crash |
 
-### 🔥 จำลองการโจมตีจาก IP ปลอม (แนะนำ!)
-
-วิธีนี้เห็นผลชัดที่สุด — จำลอง IP ต่างประเทศโจมตีเข้ามาโดยเขียน log entries ปลอมลง `server_log.txt`:
+### จำลองการโจมตี
 
 ```bash
-# Terminal 1 — เปิด Sentinel ไว้ดูผล
-sudo ./sentinel
-
-# Terminal 2 — รันตัวจำลองการโจมตี
-chmod +x simulate_attack.sh
 ./simulate_attack.sh
-
-# หรือผ่าน Makefile
-make simulate
 ```
 
-สคริปต์จำลอง 4 สถานการณ์:
+4 สถานการณ์:
 
-| สถานการณ์ | IP ปลอม | จำนวน Request | ผลลัพธ์ที่คาดหวัง |
-|-----------|---------|---------------|-------------------|
-| 1. ผู้ใช้ปกติ | `192.168.1.50` | 2 ครั้ง | ✅ ไม่ถูก Ban (ต่ำกว่า threshold) |
-| 2. Brute Force | `10.0.0.66` | 8 ครั้ง | 🔴 ถูก Ban! (เกิน threshold) |
-| 3. Distributed Scan | `172.16.0.10-14` | คนละ 1 ครั้ง | ✅ ไม่ถูก Ban (กระจายตัว) |
-| 4. DDoS | `203.0.113.99` | 7 ครั้ง | 🔴 ถูก Ban! (เกิน threshold) |
+| สถานการณ์ | รายละเอียด | ผลลัพธ์ |
+|-----------|-----------|---------|
+| Normal User | 2 GET requests ปกติ | HTTP 200 |
+| Brute Force | 15 requests รวด | บาง request ได้ 429 |
+| SQLi | `?id=1' OR '1'='1` | HTTP 403 |
+| XSS | `?q=<script>alert(1)</script>` | HTTP 403 |
 
-### ทดสอบด้วยมือ (Manual Test)
+### ทดสอบด้วยมือ
 
 ```bash
-# Terminal 1 — เปิด Server
-./my_server
+# Request ปกติ
+curl http://localhost:8080/
 
-# Terminal 2 — เปิด Sentinel
-sudo ./sentinel
+# ดู headers
+curl -I http://localhost:8080/
 
-# Terminal 3 — ทดสอบ
-curl http://localhost:8080/              # หน้า Default
-curl http://localhost:8080/VANGUARD      # หน้า Vanguard
-curl http://localhost:8080/stats         # JSON Stats
-curl -I http://localhost:8080/           # ดูเฉพาะ Headers
+# SQLi
+curl "http://localhost:8080/?id=1'%20OR%20'1'='1"
 
-# ทดสอบ Rate Detection (ส่ง Request รัว ๆ)
-for i in $(seq 1 10); do curl -s http://localhost:8080/ > /dev/null; done
-# แล้วดู Terminal ของ Sentinel ว่ามี THREAT DETECTED หรือไม่
+# XSS
+curl "http://localhost:8080/?q=%3Cscript%3Ealert(1)%3C/script%3E"
+
+# Rate limit (ส่งรัว ๆ)
+for i in $(seq 1 15); do
+    echo "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)"
+done
 ```
 
----
-
-## วิธี Bypass / Unban ตัวเอง
-
-> ⚠️ **ถ้าคุณทดสอบแล้วโดน Sentinel Ban ตัวเอง** — ไม่ต้องตกใจ! ทำตามนี้:
-
-### วิธีที่ 1: ใช้สคริปต์ `unban.sh` (แนะนำ)
+### Unit Tests (จาก v1)
 
 ```bash
-# ปลด Ban ทุก IP ที่ถูกบล็อก
-sudo ./unban.sh --all
-
-# หรือปลดเฉพาะ IP ของตัวเอง
-sudo ./unban.sh 127.0.0.1
-
-# หรือเปิดเมนูโต้ตอบ
-sudo ./unban.sh
-
-# หรือผ่าน Makefile
-make unban
+make test-unit
 ```
 
-### วิธีที่ 2: ใช้คำสั่ง iptables ตรง ๆ
-
-```bash
-# ดู IP ที่ถูก Ban ทั้งหมด
-sudo iptables -L INPUT -n --line-numbers
-
-# ปลด Ban IP ที่ระบุ
-sudo iptables -D INPUT -s 127.0.0.1 -j DROP
-
-# ลบ Rule ทุกอันใน INPUT chain (ระวัง! ลบหมดเลย)
-sudo iptables -F INPUT
-```
-
-### วิธีที่ 3: ป้องกันไม่ให้โดน Ban ตั้งแต่แรก
-
-```bash
-# เพิ่ม IP ของตัวเองลงใน whitelist.conf
-echo "127.0.0.1" >> whitelist.conf      # สำหรับ localhost
-echo "192.168.1.100" >> whitelist.conf   # สำหรับ IP จริง (เปลี่ยนตามเครื่อง)
-```
-
-### วิธีที่ 4: เพิ่ม Threshold ชั่วคราว (สำหรับทดสอบ)
-
-แก้ [`config.conf`](config.conf) ให้ threshold สูงขึ้น:
-```conf
-ban_threshold = 100    # จาก 5 เป็น 100 เพื่อทดสอบ
-time_window   = 10     # จาก 60 เป็น 10 วินาที
-```
-แล้ว restart Sentinel ใหม่
+| ไฟล์ | ทดสอบ |
+|------|------|
+| `tests/test_ip.cpp` | IP validation + parsing (20 cases) |
+| `tests/test_config.cpp` | Config parser (7 cases) |
+| `tests/test_rate.cpp` | Rate detection algorithm (9 cases) |
 
 ---
 
@@ -412,78 +315,82 @@ time_window   = 10     # จาก 60 เป็น 10 วินาที
 
 ```
 vanguard/
-├── include/                # Shared header files
-│   ├── colors.h            #   ├── ANSI color constants
-│   ├── config.h            #   ├── Config parser + VanguardConfig struct
-│   ├── ip_utils.h          #   ├── IP validation & parsing
-│   └── logger.h            #   └── Thread-safe Logger class
-├── tests/                  # Unit tests (C++)
-│   ├── test_ip.cpp         #   ├── IP validation tests (20 cases)
-│   ├── test_config.cpp     #   ├── Config parser tests (7 cases)
-│   └── test_rate.cpp       #   └── Rate detection tests (9 cases)
+├── vanguard_proxy.cpp      # Edge Proxy + WAF Engine (epoll, rate limit, WAF)
+├── my_server.cpp           # Backend Web Server (127.0.0.1:3000)
+├── whitelist.conf          # IP ที่ bypass rate limit
+├── simulate_attack.sh      # จำลองการโจมตีผ่าน curl
+├── test.sh                 # Test suite อัตโนมัติ
+├── Makefile                # Build system (g++ -std=c++17 -O3)
+│
+├── include/                # Shared headers
+│   ├── colors.h            #   ANSI color constants
+│   ├── config.h            #   Config parser (ใช้กับ legacy v1)
+│   ├── ip_utils.h          #   IP validation & parsing
+│   └── logger.h            #   Thread-safe Logger (ใช้กับ legacy v1)
+│
+├── tests/                  # Unit tests
+│   ├── test_ip.cpp         #   IP validation (20 cases)
+│   ├── test_config.cpp     #   Config parser (7 cases)
+│   └── test_rate.cpp       #   Rate detection (9 cases)
+│
+├── server.cpp              # [Legacy v1] HTTP Server (port 8080)
+├── sentinel.cpp            # [Legacy v1] Log-based IDS/IPS
+├── config.conf             # [Legacy v1] Shared config file
+├── unban.sh                # [Legacy v1] iptables unban script
+│
 ├── .github/workflows/      # CI/CD
-│   └── build.yml           #   └── GitHub Actions: Build & Test
-├── server.cpp              # HTTP Server แบบ Multi-threaded
-├── sentinel.cpp            # ระบบตรวจจับภัยคุกคามแบบ Real-time (IDS/IPS)
-├── config.conf             # ไฟล์ตั้งค่าที่ใช้ร่วมกัน
-├── whitelist.conf          # รายการ IP ที่เชื่อถือได้
-├── test.sh                 # สคริปต์ทดสอบ Integration (Shell)
-├── simulate_attack.sh      # จำลองการโจมตีจาก IP ปลอม
-├── unban.sh                # เครื่องมือปลด Ban IP
-├── Makefile                # สคริปต์สำหรับ Build / Test / Run
-├── .gitignore              # กฎสำหรับ Git ไม่ Track ไฟล์บางประเภท
-├── LICENSE                 # สัญญาอนุญาต MIT
+├── .gitignore
+├── LICENSE                 # MIT
 └── README.md               # ไฟล์นี้
 ```
 
 ---
 
-## สิ่งที่ได้เรียนรู้
+## เทคโนโลยีที่ใช้
 
-โปรเจกต์นี้ทำให้ได้เรียนรู้แนวคิดหลายอย่างในเชิงลึก:
-
-### 🔌 Network Programming
-- เข้าใจลำดับการทำงานของ Socket: `socket()` → `bind()` → `listen()` → `accept()` → `recv()`/`send()`
-- เข้าใจโครงสร้าง HTTP Request/Response ในระดับ byte
-- ได้ลองสร้าง HTTP Server ที่ทำงานได้จริงโดยไม่พึ่ง library ภายนอก
-
-### 🧵 Concurrency & Thread Safety
-- เข้าใจว่าทำไม Multi-threaded program ต้องมี `mutex` — เจอ Race Condition ในการเขียน Log และแก้ไขด้วย `std::lock_guard`
-- เรียนรู้ความแตกต่างระหว่าง `inet_ntoa()` (thread-unsafe) กับ `inet_ntop()` (thread-safe)
-- ใช้ `std::atomic` สำหรับ counters ที่หลาย thread เข้าถึง
-- ออกแบบ Graceful Shutdown ที่รอ threads จบก่อนปิดโปรแกรม
-
-### 🛡️ Security Concepts
-- เข้าใจหลักการของ IDS/IPS (Intrusion Detection/Prevention System)
-- ใช้ `fork()` + `execl()` แทน `system()` เพื่อป้องกัน Command Injection
-- ออกแบบ Rate Limiting Algorithm ด้วย Sliding Window
-- เรียนรู้การใช้ iptables สำหรับ Firewall ระดับ Linux Kernel
-
-### 📐 Software Engineering
-- แยก code เป็น Header files เพื่อลด duplication และเพิ่ม reusability
-- เขียน Unit Tests ที่ครอบคลุม edge cases
-- ใช้ `try-catch` สำหรับ error handling ที่ robust
-- เลือกโครงสร้างข้อมูลที่เหมาะสม (`std::deque` แทน `vector` สำหรับ O(1) front removal)
+| เทคโนโลยี | การใช้งาน |
+|-----------|---------|
+| **C++17** | ภาษาหลัก — `std::string_view`, structured bindings, `constexpr` |
+| **Linux epoll** | Event loop สำหรับ non-blocking accept (proxy) |
+| **POSIX Sockets** | TCP socket programming ตั้งแต่ต้น |
+| **std::thread** | Thread-per-connection สำหรับ proxy handler |
+| **std::mutex** | Thread-safe rate limiter + console output |
+| **std::atomic** | Lock-free counters (requests, blocked, forwarded) |
+| **std::unordered_map** | Token bucket storage per-IP |
+| **std::unordered_set** | Whitelist lookup O(1) |
+| **std::mt19937_64** | Ray ID generation (thread-local RNG) |
 
 ---
 
-## แผนพัฒนาในอนาคต
+## สิ่งที่ได้เรียนรู้
 
-- [ ] **IPv6 Support** — รองรับ IPv6 Address ใน validation และ firewall
-- [ ] **Web Dashboard** — สร้างหน้า Dashboard แสดง Real-time stats, กราฟ traffic, รายการ Banned IPs
-- [ ] **HTTP 429 Response** — ส่ง "Too Many Requests" ก่อนที่จะ ban จริง ๆ
-- [ ] **User-Agent Detection** — ตรวจจับ bot/scanner จาก User-Agent header
-- [ ] **Log Rotation** — หมุนไฟล์ Log อัตโนมัติเมื่อมีขนาดใหญ่
-- [ ] **Config Hot-reload** — อ่าน config ใหม่โดยไม่ต้อง restart
-- [ ] **Payload Inspection** — ตรวจจับ SQL Injection patterns ใน request body
+### Network & Systems Programming
+- สร้าง HTTP Server + Reverse Proxy ตั้งแต่ต้นด้วย POSIX `socket()`, `bind()`, `listen()`, `accept()`, `connect()`
+- ใช้ `epoll(7)` สำหรับ non-blocking I/O ที่รองรับ connection จำนวนมาก
+- ใช้ `string_view` สำหรับ zero-copy parsing — ลด memory allocation ระหว่าง request inspection
+
+### Concurrency
+- ออกแบบ thread-safe rate limiter ด้วย `std::mutex` + `std::lock_guard`
+- ใช้ `inet_ntop()` แทน `inet_ntoa()` เพราะ thread-safe
+- ใช้ `std::atomic` สำหรับ counters ที่หลาย thread เข้าถึงพร้อมกัน
+- `SIGPIPE` ignored เพื่อไม่ให้ crash เมื่อ client ปิด connection กลางทาง
+
+### Security
+- ออกแบบ WAF engine ที่ตรวจจับ SQLi + XSS patterns ทั้ง raw และ URL-encoded
+- ใช้ Token Bucket algorithm สำหรับ rate limiting ที่ยืดหยุ่นกว่า sliding window
+- แยก proxy (public) กับ backend (private/loopback) เพื่อลด attack surface
+- Inject headers (`X-Vanguard-Connecting-IP`) เพื่อให้ backend รู้ IP จริงของ client
+
+### Software Design
+- เปลี่ยนจาก out-of-band (อ่าน log file) เป็น in-line (ตรวจสอบทันทีก่อน forward)
+- แยก concerns: proxy ทำ security, backend ทำ business logic
+- ใช้ Ray ID สำหรับ request tracing ข้าม proxy และ backend
 
 ---
 
 ## ผู้พัฒนา
 
 **สัตยา ทองแดง (Sattaya Thongdaeng)**
-
-สร้างด้วย 💚 จาก C++ และ POSIX Systems Programming
 
 ---
 

@@ -77,15 +77,16 @@ static std::string get_header(const std::string& request,
 // ║       HTML Page Generator             ║
 // ╚═══════════════════════════════════════╝
 
-// สร้างหน้า HTML แบบ modern dark UI พร้อม animation
+// สร้างหน้า HTML แบบ terminal panel — monospace, ไม่มี emoji, ดิบๆ แบบ sysadmin
 static std::string make_page(const std::string& title,
-                              const std::string& emoji,
+                              const std::string& /* emoji */,
                               const std::string& heading,
                               const std::string& subtitle,
                               const std::string& status_text,
                               bool is_ok) {
-    std::string status_class = is_ok ? "online" : "error";
-    std::string pulse_class  = is_ok ? "green"  : "red";
+    std::string accent = is_ok ? "#6a9" : "#b55";
+    std::string bar_bg = is_ok ? "#0f1a14" : "#1a0f0f";
+    std::string bdr    = is_ok ? "#1a3328" : "#331a1a";
 
     return
         "<!DOCTYPE html><html lang=\"en\">"
@@ -94,58 +95,36 @@ static std::string make_page(const std::string& title,
         "<title>" + title + "</title>"
         "<style>"
         "*{margin:0;padding:0;box-sizing:border-box}"
-        "body{"
-            "background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#0d1117 100%);"
-            "color:#e6edf3;"
-            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
-            "min-height:100vh;display:flex;align-items:center;justify-content:center"
-        "}"
-        ".container{"
-            "text-align:center;padding:3rem;"
-            "background:rgba(22,27,34,0.8);"
-            "border:1px solid #30363d;border-radius:12px;"
-            "backdrop-filter:blur(10px);"
-            "box-shadow:0 8px 32px rgba(0,0,0,0.3);"
-            "max-width:500px;width:90%;"
-            "animation:fadeIn .6s ease-out"
-        "}"
-        "@keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}"
-        ".logo{font-size:3rem;margin-bottom:.5rem}"
-        "h1{"
-            "font-size:1.8rem;"
-            "background:linear-gradient(135deg,#58a6ff,#3fb950);"
-            "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
-            "background-clip:text;margin-bottom:.5rem"
-        "}"
-        ".subtitle{color:#8b949e;font-size:1rem;margin-bottom:1.5rem}"
-        ".status{"
-            "display:inline-block;padding:.35rem 1rem;"
-            "border-radius:2rem;font-size:.85rem;font-weight:600"
-        "}"
-        ".status.online{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.4)}"
-        ".status.error{background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.4)}"
-        ".pulse{"
-            "display:inline-block;width:8px;height:8px;"
-            "border-radius:50%;margin-right:6px;"
-            "animation:pulse 2s infinite"
-        "}"
-        ".pulse.green{background:#3fb950}"
-        ".pulse.red{background:#f85149}"
-        "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}"
-        ".footer{"
-            "color:#484f58;margin-top:2rem;font-size:.75rem;"
-            "border-top:1px solid #21262d;padding-top:1rem"
-        "}"
+        "body{background:#0a0a0a;color:#999;font-family:'Courier New',Consolas,'Liberation Mono',monospace;"
+            "min-height:100vh;display:flex;align-items:center;justify-content:center}"
+        ".p{max-width:460px;width:92%;border:1px solid " + bdr + ";background:#111}"
+        ".bar{background:" + bar_bg + ";border-bottom:1px solid " + bdr + ";"
+            "padding:9px 16px;font-size:11px;color:#555;display:flex;"
+            "justify-content:space-between;text-transform:uppercase;letter-spacing:2px}"
+        ".bd{padding:28px 20px}"
+        "h1{font-size:16px;color:#ccc;font-weight:600;letter-spacing:2px;margin-bottom:6px}"
+        ".st{font-size:12px;color:" + accent + ";margin-bottom:20px}"
+        ".st i{display:inline-block;width:6px;height:6px;background:" + accent + ";"
+            "border-radius:50%;margin-right:7px;animation:b 3s infinite}"
+        "@keyframes b{0%,100%{opacity:1}50%{opacity:.2}}"
+        ".inf{font-size:12px;color:#555;line-height:2.0}"
+        ".inf b{color:#888;font-weight:400}"
+        "hr{border:0;border-top:1px solid #1a1a1a;margin:16px 0}"
+        ".ft{font-size:10px;color:#333;letter-spacing:1px}"
         "</style></head>"
-        "<body><div class=\"container\">"
-        "<div class=\"logo\">" + emoji + "</div>"
+        "<body><div class=\"p\">"
+        "<div class=\"bar\"><span>vanguard</span><span>v2.0</span></div>"
+        "<div class=\"bd\">"
         "<h1>" + heading + "</h1>"
-        "<p class=\"subtitle\">" + subtitle + "</p>"
-        "<span class=\"status " + status_class + "\">"
-        "<span class=\"pulse " + pulse_class + "\"></span>"
-        + status_text + "</span>"
-        "<p class=\"footer\">Vanguard Backend v2.0 &middot; Built with C++ &middot; by Sattaya</p>"
-        "</div></body></html>";
+        "<div class=\"st\"><i></i>" + status_text + "</div>"
+        "<div class=\"inf\">"
+        "server &gt; <b>" + subtitle + "</b><br>"
+        "engine &gt; <b>c++17 / posix sockets</b><br>"
+        "proxy &gt; <b>vanguard-edge 1.0</b>"
+        "</div>"
+        "<hr>"
+        "<div class=\"ft\">vanguard network security</div>"
+        "</div></div></body></html>";
 }
 
 // ╔═══════════════════════════════════════╗

@@ -217,9 +217,9 @@ std::unordered_set<std::string> load_whitelist(const char* path) {
 // ║       Custom Block Pages (dark theme HTML)                ║
 // ╚═══════════════════════════════════════════════════════════╝
 
-// สร้างหน้า block page พร้อม CSS animation แบบ Cloudflare
+// สร้าง block page แบบ terminal panel — ไม่มี emoji, monospace, ดิบๆ
 std::string make_block_page(int code, const std::string& title,
-                             const std::string& emoji,
+                             const std::string& /* emoji */,
                              const std::string& heading,
                              const std::string& message,
                              const std::string& detail,
@@ -231,95 +231,74 @@ std::string make_block_page(int code, const std::string& title,
          << "<title>" << title << "</title>"
          << "<style>"
          << "*{margin:0;padding:0;box-sizing:border-box}"
-         << "body{"
-         <<   "background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#0d1117 100%);"
-         <<   "color:#e6edf3;"
-         <<   "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
-         <<   "min-height:100vh;display:flex;align-items:center;justify-content:center"
-         << "}"
-         << ".container{"
-         <<   "text-align:center;padding:3rem;"
-         <<   "background:rgba(22,27,34,0.8);"
-         <<   "border:1px solid #30363d;border-radius:12px;"
-         <<   "backdrop-filter:blur(10px);"
-         <<   "box-shadow:0 8px 32px rgba(0,0,0,0.3);"
-         <<   "max-width:560px;width:90%;"
-         <<   "animation:fadeIn .6s ease-out"
-         << "}"
-         << "@keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}"
-         << ".logo{font-size:3.5rem;margin-bottom:.5rem}"
-         << "h1{"
-         <<   "font-size:1.8rem;"
-         <<   "background:linear-gradient(135deg,#f85149,#da3633);"
-         <<   "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
-         <<   "background-clip:text;margin-bottom:.5rem"
-         << "}"
-         << ".message{color:#8b949e;font-size:1rem;margin-bottom:1.5rem;line-height:1.6}"
-         << ".status{"
-         <<   "display:inline-block;padding:.35rem 1rem;"
-         <<   "border-radius:2rem;font-size:.85rem;font-weight:600;"
-         <<   "background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.4)"
-         << "}"
-         << ".pulse{"
-         <<   "display:inline-block;width:8px;height:8px;"
-         <<   "border-radius:50%;margin-right:6px;"
-         <<   "background:#f85149;animation:pulse 2s infinite"
-         << "}"
-         << "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}"
-         << ".detail{color:#484f58;font-size:.8rem;margin-top:1rem;font-family:'SF Mono',Consolas,monospace}"
-         << ".footer{"
-         <<   "color:#484f58;margin-top:1.5rem;font-size:.75rem;"
-         <<   "border-top:1px solid #21262d;padding-top:1rem"
-         << "}"
+         << "body{background:#0a0a0a;color:#999;"
+         <<   "font-family:'Courier New',Consolas,'Liberation Mono',monospace;"
+         <<   "min-height:100vh;display:flex;align-items:center;justify-content:center}"
+         << ".p{max-width:480px;width:92%;border:1px solid #331818;background:#111}"
+         << ".bar{background:#180e0e;border-bottom:1px solid #331818;"
+         <<   "padding:9px 16px;font-size:11px;color:#744;"
+         <<   "display:flex;justify-content:space-between;"
+         <<   "text-transform:uppercase;letter-spacing:2px}"
+         << ".bd{padding:28px 20px}"
+         << ".code{font-size:52px;font-weight:700;color:#c44;line-height:1;letter-spacing:-2px}"
+         << "h1{font-size:13px;color:#966;font-weight:600;letter-spacing:3px;"
+         <<   "text-transform:uppercase;margin:8px 0 16px}"
+         << ".msg{font-size:12px;color:#666;line-height:1.9;margin-bottom:16px}"
+         << "hr{border:0;border-top:1px solid #1e1212;margin:14px 0}"
+         << ".meta{font-size:11px;color:#444;line-height:2.0}"
+         << ".meta b{color:#666;font-weight:400}"
+         << ".ft{font-size:10px;color:#2a1a1a;letter-spacing:1px;margin-top:12px}"
          << "</style></head>"
-         << "<body><div class=\"container\">"
-         << "<div class=\"logo\">" << emoji << "</div>"
+         << "<body><div class=\"p\">"
+         << "<div class=\"bar\"><span>vanguard waf</span><span>blocked</span></div>"
+         << "<div class=\"bd\">"
+         << "<div class=\"code\">" << code << "</div>"
          << "<h1>" << heading << "</h1>"
-         << "<p class=\"message\">" << message << "</p>"
-         << "<span class=\"status\">"
-         << "<span class=\"pulse\"></span>"
-         << "Error " << code
-         << "</span>"
-         << "<p class=\"detail\">" << detail << "</p>"
-         << "<p class=\"detail\">Ray ID: " << ray_id << "</p>"
-         << "<p class=\"footer\">Vanguard Edge Engine v1.0 &middot; Protection by Vanguard WAF &middot; by Sattaya</p>"
-         << "</div></body></html>";
+         << "<div class=\"msg\">" << message << "</div>"
+         << "<hr>"
+         << "<div class=\"meta\">"
+         << "ray-id &gt; <b>" << ray_id << "</b><br>"
+         << "action &gt; <b>block</b><br>"
+         << "detail &gt; <b>" << detail << "</b>"
+         << "</div>"
+         << "<div class=\"ft\">vanguard edge engine 1.0</div>"
+         << "</div></div></body></html>";
     return html.str();
 }
 
 static std::string make_429_page(const std::string& ray_id) {
-    return make_block_page(429, "429 Too Many Requests", "🛑",
-        "RATE LIMIT EXCEEDED",
-        "You are sending requests too quickly.<br>"
-        "Please slow down and try again in a few seconds.",
-        "Your IP has been temporarily rate-limited by Vanguard Edge Engine.",
+    return make_block_page(429, "429 Too Many Requests", "",
+        "rate limited",
+        "too many requests from your ip address.<br>"
+        "wait a moment before retrying.",
+        "token bucket exhausted",
         ray_id);
 }
 
 static std::string make_403_sqli_page(const std::string& ray_id) {
-    return make_block_page(403, "403 Forbidden &mdash; WAF Block", "🛡️",
-        "REQUEST BLOCKED &mdash; SQL INJECTION",
-        "Your request was blocked because it contained a pattern<br>"
-        "matching a known SQL Injection attack signature.",
-        "Incident logged. Repeated violations may result in a permanent ban.",
+    return make_block_page(403, "403 Forbidden", "",
+        "sql injection blocked",
+        "your request matched a known sql injection<br>"
+        "signature and has been rejected.",
+        "waf rule: sqli pattern match",
         ray_id);
 }
 
 static std::string make_403_xss_page(const std::string& ray_id) {
-    return make_block_page(403, "403 Forbidden &mdash; WAF Block", "⚠️",
-        "REQUEST BLOCKED &mdash; XSS DETECTED",
-        "Your request was blocked because it contained a pattern<br>"
-        "matching a known Cross-Site Scripting (XSS) attack signature.",
-        "Incident logged. Repeated violations may result in a permanent ban.",
+    return make_block_page(403, "403 Forbidden", "",
+        "xss attack blocked",
+        "your request matched a known cross-site scripting<br>"
+        "signature and has been rejected.",
+        "waf rule: xss pattern match",
         ray_id);
 }
 
 static std::string make_502_page(const std::string& ray_id,
                                   const std::string& detail) {
-    return make_block_page(502, "502 Bad Gateway", "💥",
-        "BACKEND UNREACHABLE",
-        "The upstream server is not responding.<br>"
-        "Please ensure the backend service is running.",
+    return make_block_page(502, "502 Bad Gateway", "",
+        "backend unreachable",
+        "the upstream server did not respond.<br>"
+        "ensure the backend service is running on port 3000.",
         detail, ray_id);
 }
 
