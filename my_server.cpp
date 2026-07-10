@@ -11,7 +11,7 @@
 //
 // by Sattaya — Project Vanguard v2
 // ═══════════════════════════════════════════════════════════════════════
-
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
