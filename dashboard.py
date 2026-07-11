@@ -14,21 +14,21 @@ by Sattaya — Project Vanguard v2
 ═══════════════════════════════════════════════════════════════════════
 """
 
+from __future__ import annotations
+
 import time
 import sys
 import argparse
+from typing import Optional, List
 import requests
 from datetime import datetime
 
 from rich.console import Console
 from rich.layout import Layout
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 from rich.live import Live
 from rich.align import Align
-from rich.columns import Columns
-from rich.rule import Rule
 
 # ╔═══════════════════════════════════════╗
 # ║         Configuration                 ║
@@ -72,13 +72,13 @@ class VanguardDashboard:
         self.prev_requests = 0
         self.prev_time = time.monotonic()
         self.current_rps = 0.0
-        self.rps_history: list[float] = []
+        self.rps_history: List[float] = []
         self.max_rps = 0.0
         self.poll_count = 0
         self.error_count = 0
         self.start_time = datetime.now()
 
-    def fetch_stats(self) -> dict | None:
+    def fetch_stats(self) -> Optional[dict]:
         """Poll the backend /stats endpoint. Returns None on failure."""
         try:
             resp = requests.get(self.url, timeout=2)
@@ -124,7 +124,7 @@ class VanguardDashboard:
             border_style="bright_black",
         )
 
-    def make_status_panel(self, data: dict | None) -> Panel:
+    def make_status_panel(self, data: Optional[dict]) -> Panel:
         """Server status indicator panel."""
         if data is None:
             status_text = Text()
@@ -148,13 +148,13 @@ class VanguardDashboard:
         status_text = Text()
         status_text.append("● ", style="bold green")
         status_text.append("ONLINE", style="bold green")
-        status_text.append(f"\n\n  Server   ", style="dim")
+        status_text.append("\n\n  Server   ", style="dim")
         status_text.append(f"{server}", style="bright_white")
-        status_text.append(f"\n  Bind     ", style="dim")
+        status_text.append("\n  Bind     ", style="dim")
         status_text.append(f"{bind}", style="bright_cyan")
-        status_text.append(f"\n  Uptime   ", style="dim")
+        status_text.append("\n  Uptime   ", style="dim")
         status_text.append(f"{format_uptime(uptime)}", style="bright_yellow")
-        status_text.append(f"\n  Status   ", style="dim")
+        status_text.append("\n  Status   ", style="dim")
         status_text.append(f"{status}", style="bright_green")
 
         return Panel(
@@ -164,7 +164,7 @@ class VanguardDashboard:
             padding=(1, 2),
         )
 
-    def make_metrics_panel(self, data: dict | None) -> Panel:
+    def make_metrics_panel(self, data: Optional[dict]) -> Panel:
         """Requests and connections metrics panel."""
         if data is None:
             metrics_text = Text("  No data available", style="dim red")
@@ -187,14 +187,18 @@ class VanguardDashboard:
         metrics_text.append(f"{total_reqs:,}", style="bold bright_white")
 
         metrics_text.append("\n  Active Connections ", style="dim")
-        conn_style = "bold bright_green" if active_conns < 10 else "bold bright_yellow" if active_conns < 50 else "bold bright_red"
+        if active_conns < 10:
+            conn_style = "bold bright_green"
+        elif active_conns < 50:
+            conn_style = "bold bright_yellow"
+        else:
+            conn_style = "bold bright_red"
         metrics_text.append(f"{active_conns}", style=conn_style)
 
         metrics_text.append("\n")
         metrics_text.append("\n  ── Throughput ─────────────────", style="bright_black")
         metrics_text.append("\n  Current RPS        ", style="dim")
-        rps_style = "bold bright_cyan"
-        metrics_text.append(f"{self.current_rps:.1f} req/s", style=rps_style)
+        metrics_text.append(f"{self.current_rps:.1f} req/s", style="bold bright_cyan")
 
         metrics_text.append("\n  Average RPS        ", style="dim")
         metrics_text.append(f"{avg_rps:.1f} req/s", style="bright_cyan")
@@ -229,7 +233,12 @@ class VanguardDashboard:
         for val in history:
             idx = int((val / max_val) * (len(blocks) - 1))
             idx = min(idx, len(blocks) - 1)
-            color = "bright_green" if val < max_val * 0.5 else "bright_yellow" if val < max_val * 0.8 else "bright_red"
+            if val < max_val * 0.5:
+                color = "bright_green"
+            elif val < max_val * 0.8:
+                color = "bright_yellow"
+            else:
+                color = "bright_red"
             sparkline.append(blocks[idx], style=color)
 
         sparkline.append(f"\n  └{'─' * len(history)}┘", style="bright_black")
@@ -254,11 +263,11 @@ class VanguardDashboard:
         footer.append(f"  │  Interval: {POLL_INTERVAL}s", style="dim")
         footer.append(f"  │  Dashboard uptime: {running_str}", style="dim")
         footer.append(f"  │  {now}", style="dim")
-        footer.append(f"  │  Ctrl+C to exit", style="dim yellow")
+        footer.append("  │  Ctrl+C to exit", style="dim yellow")
 
         return Panel(footer, style="dim", border_style="bright_black")
 
-    def build_layout(self, data: dict | None) -> Layout:
+    def build_layout(self, data: Optional[dict]) -> Layout:
         """Compose the full dashboard layout."""
         layout = Layout()
         layout.split_column(

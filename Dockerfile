@@ -17,7 +17,7 @@ RUN apk add --no-cache \
 
 WORKDIR /build
 
-# Copy source code and build artifacts
+# Copy source code
 COPY Makefile          .
 COPY vanguard_proxy.cpp .
 COPY my_server.cpp     .
@@ -38,11 +38,11 @@ LABEL maintainer="Sattaya — Project Vanguard v2"
 LABEL description="Vanguard Edge Proxy + Backend Server"
 LABEL version="2.0"
 
-# Install curl for healthcheck, tini for proper PID 1 handling
-RUN apk add --no-cache curl tini
-
-# Create non-root user for security
-RUN addgroup -S vanguard && adduser -S vanguard -G vanguard
+# Install:
+#   curl    — healthcheck
+#   tini    — proper PID 1 signal forwarding
+#   bash    — entrypoint uses bash features (wait -n)
+RUN apk add --no-cache curl tini bash
 
 WORKDIR /app
 
@@ -56,9 +56,6 @@ COPY whitelist.conf .
 # Copy entrypoint script
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh vanguard_proxy my_server
-
-# Ensure the vanguard user owns everything
-RUN chown -R vanguard:vanguard /app
 
 # Expose proxy port (backend is loopback-only, not exposed)
 EXPOSE 8080
