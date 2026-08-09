@@ -1,0 +1,45 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Vanguard v2 — Docker Compose
+# Single-container deployment: proxy + backend in one namespace
+# ═══════════════════════════════════════════════════════════════════════
+
+services:
+  vanguard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vanguard-v2
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+    # ── Health Check ───────────────────────────────────────────────────
+    # Polls the /VANGUARD endpoint through the proxy to confirm
+    # both the proxy AND backend are alive and routing correctly.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/VANGUARD"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # ── Resource Limits ────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 256M
+        reservations:
+          cpus: "0.5"
+          memory: 64M
+
+    # ── Logging ────────────────────────────────────────────────────────
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ── Environment ────────────────────────────────────────────────────
+    environment:
+      - TZ=Asia/Bangkok
