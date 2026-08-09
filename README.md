@@ -110,9 +110,9 @@ python3 vanguard_gui.py
                     │         │                │           │
                     │         ▼                ▼           │
                     │  ┌─────────────────────────────────┐ │
-                    │  │  403 บล็อก   │  429 จำกัดอัตรา     │ │
+                    │  │  403 บล็อก   │  429 จำกัดอัตรา      │ │
                     │  └─────────────────────────────────┘ │
-                    │         │ (Traffic ที่ปลอดภัย)         │
+                    │         │ (Traffic ที่ปลอดภัย)          │
                     │         ▼                            │
                     │  ┌─────────────────────────────────┐ │
                     │  │  Reverse Proxy + Header Inject  │ │
@@ -126,7 +126,7 @@ python3 vanguard_gui.py
                     │       BACKEND WEB SERVER             │
                     │       127.0.0.1:3000 (loopback)      │
                     │                                      │
-                    │  เส้นทาง: / | /VANGUARD | /stats      │
+                    │  เส้นทาง: / | /VANGUARD | /stats       │
                     │  Engine: C++17 / POSIX sockets       │
                     └──────────────────────────────────────┘
 ```
@@ -158,7 +158,7 @@ HTTP Parser ที่เขียนขึ้นเองทำงานบน `
 
 ```
 ╔═══════════════════════════════════════════════════════════════════╗
-║     ⟨ VANGUARD V2 // EDGE PROXY & WAF DASHBOARD ⟩                  ║
+║     ⟨ VANGUARD V2 // EDGE PROXY & WAF DASHBOARD ⟩                 ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║ ┌─ [ SYSTEM METRICS ] ──────────────────────────────────────────┐ ║
 ║ │ STATUS: ONLINE │ UPTIME: 1h 24m │ REQS: 42,910 │ RPS: 154.2   │ ║
@@ -171,7 +171,7 @@ HTTP Parser ที่เขียนขึ้นเองทำงานบน `
 ║ └───────────────────────────────────────────────────────────────┘ ║
 ║                                                                   ║
 ║ ┌─ [ PROCESS CONTROLS & LOG STREAM ] ───────────────────────────┐ ║
-║ │ [ ■ STOP BACKEND ]   [ ▶ START PROXY ]   [ ⚡ LAUNCH STRESS ]│ ║
+║ │ [ ■ STOP BACKEND ]   [ ▶ START PROXY ]   [ ⚡ LAUNCH STRESS ] │ ║
 ║ │                                                               │ ║
 ║ │ [SYS] VANGUARD CONTROL CENTER V2 INITIALIZED.                 │ ║
 ║ │ [SYS] External process detected via Terminal Sync (PID 14201) │ ║
@@ -280,7 +280,11 @@ PROJECTVANGUARD/
 ```
 
 ---
-  ║          Made by Sattaya Thongdaeng          ║
+
+  ╔══════════════════════════════════════════════╗
+  ║  Made by Sattaya Thongdaeng                  ║
+  ╚══════════════════════════════════════════════╝
+
 ---
 ## สัญญาอนุญาต
 
