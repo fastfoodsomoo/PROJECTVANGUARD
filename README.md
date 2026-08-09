@@ -281,9 +281,9 @@ PROJECTVANGUARD/
 
 ---
 
-  ╔══════════════════════════════════════════════╗
-  ║  Made by Sattaya Thongdaeng                  ║
-  ╚══════════════════════════════════════════════╝
+  
+    Made by Sattaya Thongdaeng                  
+ 
 
 ---
 ## สัญญาอนุญาต
