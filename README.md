@@ -17,7 +17,7 @@
 **Vanguard คือ Web Application Firewall (WAF) และ Reverse Proxy ประสิทธิภาพสูง ที่ถูกพัฒนาขึ้นด้วยภาษา C++17 ด้วยมือทั้งหมดโดยไม่ใช้เฟรมเวิร์กใด ๆ ทำงานอยู่บน Linux `epoll(7)` โดยตรงเพื่อประสิทธิภาพและความปลอดภัยสูงสุด**
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg?style=flat-square&logo=cplusplus)](https://isocpp.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux-orange.svg?style=flat-square&logo=linux)](https://kernel.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=flat-square&logo=docker)](docker-compose.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-yellow.svg?style=flat-square&logo=python)](https://python.org/)
@@ -288,4 +288,4 @@ PROJECTVANGUARD/
 ---
 ## สัญญาอนุญาต
 
-โปรเจกต์นี้อยู่ภายใต้สัญญาอนุญาต MIT ดูรายละเอียดที่ [LICENSE](LICENSE)
+โปรเจกต์นี้เป็นลิขสิทธิ์เฉพาะของ นายสัตยา ทองแดง (All Rights Reserved) ไม่อนุญาตให้นำไปใช้งานหรือเผยแพร่ทุกกรณี จัดทำขึ้นเพื่อใช้เป็นผลงานสำหรับศึกษาต่อ ณ มหาวิทยาลัยเกษตรศาสตร์ คณะวิทยาศาสตร์ สาขาวิทยาการคอมพิวเตอร์ ดูรายละเอียดที่ [LICENSE](LICENSE)

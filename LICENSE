@@ -1,21 +1,34 @@
-MIT License
+PROPRIETARY & CONFIDENTIAL LICENSE (ALL RIGHTS RESERVED)
 
-Copyright (c) 2026 Sattaya Thongdaeng
+Copyright (c) 2026 Sattaya Thongdaeng. All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+===============================================================================
+ข้อกำหนดและเงื่อนไขการใช้งาน (TERMS AND CONDITIONS OF USE)
+===============================================================================
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+ผลงานนี้ (Vanguard v2 Engine & Full Stack Codebase) เป็นลิขสิทธิ์และทรัพย์สินทางปัญญาของ
+นายสัตยา ทองแดง (Sattaya Thongdaeng) จัดทำขึ้นเพื่อใช้เป็นผลงานสำหรับประกอบการสมัครเข้าศึกษาต่อ
+ในระดับอุดมศึกษา ณ มหาวิทยาลัยเกษตรศาสตร์ คณะวิทยาศาสตร์ สาขาวิทยาการคอมพิวเตอร์ เท่านั้น
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+ไม่อนุญาตให้นำส่วนหนึ่งส่วนใดหรือทั้งหมดของซอฟต์แวร์ ซอร์สโค้ด เอกสาร หรือส่วนประกอบใดๆ 
+ไปคัดลอก ดัดแปลง เผยแพร่ แจกจ่าย ทำซ้ำ นำไปใช้ในเชิงพาณิชย์ หรือนำไปรันใช้งานในระบบใดๆ ทุกกรณี
+โดยไม่ได้รับอนุญาตเป็นลายลักษณ์อักษรจากผู้สร้างสรรค์ผลงาน
+
+===============================================================================
+ENGLISH SUMMARY & LEGAL NOTICE
+===============================================================================
+
+This software and associated documentation files (the "Project Vanguard v2") are the 
+exclusive intellectual property of Sattaya Thongdaeng.
+
+STRICTLY PROHIBITED:
+Permission is NOT granted to any person or organization to use, copy, modify, 
+merge, publish, distribute, sublicense, sell, host, or execute copies of this 
+Software or any portion thereof under any circumstances.
+
+PURPOSE OF WORK:
+This codebase is developed solely as an academic portfolio project for application 
+and study at Kasetsart University, Faculty of Science, Department of Computer Science.
+
+ALL RIGHTS RESERVED.
+===============================================================================
