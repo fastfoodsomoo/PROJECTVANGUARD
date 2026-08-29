@@ -28,3 +28,18 @@ Thumbs.db
 # Extra binaries
 server
 vanguard_proxy
+
+# Secret Keys & Credentials (ห้ามนำขึ้นเด็ดขาด)
+gcp-key.json
+*.json
+.env
+
+# Virtual Environment & Python Cache
+venv/
+__pycache__/
+*.pyc
+
+# Compiled C++ Executables
+vanguard_proxy
+my_server
+*.o

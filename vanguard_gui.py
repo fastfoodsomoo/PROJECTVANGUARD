@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
 """
-VANGUARD Control Center v2
+VANGUARD Control Center v2 — Ultra Hacker Purple Cyberpunk Edition
 PyQt6 + pyqtgraph Desktop GUI for the VANGUARD C++ HTTP Proxy/WAF project.
+
+Features:
+  - Deep Black & Neon Purple Hacker Cyberpunk Aesthetics (ธีมม่วงดำ)
+  - Full ANSI Escape Sequence Parser (strips text background boxes & color code artifacts)
+  - Top Tactical Warning Header with Real-time Clock
+  - 3-Column Tactical HUD Layout (Intrusion Log Stream, RPS Traffic Monitor, Core Metrics & Controls)
+  - Monospace Typography ('Consolas', 'Courier New', 'Monospace')
+  - Start/Stop toggle buttons with OS-level external process discovery & termination (psutil)
+  - Stress Test Preset Modal Menu
+  - Non-blocking async design (QThread, QProcess, QTimer)
 """
 
 import sys
+import os
 import json
 import time
+import signal
+import re
 import urllib.request
 import urllib.error
 from collections import deque
 from datetime import datetime
+from vanguard_agent import VanguardAIAgent
 
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QProcess, QTimer, QPropertyAnimation,
@@ -23,593 +37,1117 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTextEdit, QLineEdit, QPushButton, QFrame, QSplitter,
-    QSizePolicy, QGraphicsDropShadowEffect,
+    QSizePolicy, QGraphicsDropShadowEffect, QDialog,
 )
 
 import pyqtgraph as pg
 
-
-# ── Theme constants ──────────────────────────────────────────────────────────
-
-BG_DARKEST   = "#0a0a0a"
-BG_DARK      = "#111111"
-BG_CARD      = "#1a1a1a"
-BORDER_CARD  = "#2a2a2a"
-ACCENT_GREEN = "#00ff88"
-ACCENT_CYAN  = "#00ccff"
-COLOR_WARN   = "#ffaa00"
-COLOR_DANGER = "#ff4444"
-TEXT_PRIMARY  = "#cccccc"
-TEXT_DIM      = "#666666"
-MONO_FONT    = "Consolas"
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 
-# ── Stats poller (QThread worker) ────────────────────────────────────────────
+# ── Tactical Cyberpunk Theme Palette (Purple & Void Black) ───────────────────
+
+BG_VOID           = "#020204"     # Ultra deep void black
+BG_PANEL          = "#06060c"     # Dark panel background
+BG_CARD           = "#0a0814"     # HUD module background
+BG_CARD_HOVER     = "#120e24"     # Hover state for cards
+
+BORDER_PURPLE     = "#a855f7"     # Bright neon purple border
+BORDER_PURPLE_DIM = "#4c1d95"     # Deep muted purple border
+BORDER_PURPLE_GLOW= "#c084fc"     # Glowing neon purple
+
+ACCENT_PURPLE     = "#a855f7"     # Primary purple accent
+ACCENT_PURPLE_LIGHT = "#e9d5ff"   # Light purple highlight
+ACCENT_CYAN       = "#06b6d4"     # Tactical cyan accent
+COLOR_SUCCESS     = "#22c55e"     # Green status
+COLOR_WARN        = "#f59e0b"     # Amber warning
+COLOR_DANGER      = "#ef4444"     # Red alarm/stop
+
+TEXT_PRIMARY      = "#f8fafc"     # Crisp text primary
+TEXT_DIM          = "#94a3b8"     # Subdued text
+TEXT_MUTED        = "#64748b"     # Muted text
+
+MONO_FONT         = "Consolas, 'Courier New', Monospace"
+
+
+# ── ANSI Escape Code to HTML Converter ───────────────────────────────────────
+
+def ansi_to_html(text: str) -> str:
+    """Parses ANSI color escape sequences into clean HTML without text background boxes."""
+    if not text:
+        return ""
+    
+    # HTML escape special characters
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # Strip any ANSI background color codes (40-47, 100-107, 48;...) to eliminate background color boxes
+    text = re.sub(r'\x1b\[(?:4[0-7]|10[0-7]|48;[0-9;]+)m', '', text)
+    
+    fg_map = {
+        '0': '</span>',
+        '1': '<span style="font-weight:bold;">',
+        '2': '<span style="opacity:0.75;">',
+        '30': '<span style="color:#64748b;">',
+        '31': '<span style="color:#ef4444;">',
+        '32': '<span style="color:#22c55e;">',
+        '33': '<span style="color:#fbbf24;">',
+        '34': '<span style="color:#3b82f6;">',
+        '35': '<span style="color:#c084fc;">',
+        '36': '<span style="color:#06b6d4;">',
+        '37': '<span style="color:#f8fafc;">',
+        '90': '<span style="color:#64748b;">',
+        '91': '<span style="color:#f87171;">',
+        '92': '<span style="color:#4ade80;">',
+        '93': '<span style="color:#fde047;">',
+        '94': '<span style="color:#60a5fa;">',
+        '95': '<span style="color:#e879f9;">',
+        '96': '<span style="color:#22d3ee;">',
+        '97': '<span style="color:#ffffff;">',
+        '1;31': '<span style="color:#ef4444;font-weight:bold;">',
+        '1;32': '<span style="color:#22c55e;font-weight:bold;">',
+        '1;33': '<span style="color:#fbbf24;font-weight:bold;">',
+        '1;34': '<span style="color:#3b82f6;font-weight:bold;">',
+        '1;35': '<span style="color:#c084fc;font-weight:bold;">',
+        '1;36': '<span style="color:#06b6d4;font-weight:bold;">',
+    }
+
+    def replace_ansi(match):
+        code = match.group(1)
+        if code in fg_map:
+            return fg_map[code]
+        elif code == '0' or code == '':
+            return '</span>'
+        else:
+            return ''
+
+    # Replace escape codes \x1b[...]m
+    text = re.sub(r'\x1b\[([0-9;]*)m', replace_ansi, text)
+    # Strip any remaining control codes \x1b[...]
+    text = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+    return text
+
+
+# ── Stress Test Presets ──────────────────────────────────────────────────────
+
+STRESS_PRESETS = [
+    {
+        "name": "🟢 LIGHT LOAD",
+        "mode": "normal",
+        "concurrency": 10,
+        "requests": 200,
+        "description": "Steady traffic load with 10ms delays",
+        "expected": "HTTP 200 (All Pass)",
+        "accent": COLOR_SUCCESS,
+    },
+    {
+        "name": "🟡 NORMAL LOAD",
+        "mode": "normal",
+        "concurrency": 50,
+        "requests": 1000,
+        "description": "Standard load test with moderate concurrency",
+        "expected": "HTTP 200 (All Pass)",
+        "accent": COLOR_WARN,
+    },
+    {
+        "name": "🔴 HEAVY LOAD",
+        "mode": "bruteforce",
+        "concurrency": 100,
+        "requests": 5000,
+        "description": "Flood requests to trigger Token Bucket rate limiter",
+        "expected": "HTTP 200 + 429 (Rate Limited)",
+        "accent": COLOR_DANGER,
+    },
+    {
+        "name": "🛡️ WAF TEST (SQLI)",
+        "mode": "sqli",
+        "concurrency": 20,
+        "requests": 200,
+        "description": "SQL Injection payloads to verify WAF protection",
+        "expected": "HTTP 403 (Blocked by WAF)",
+        "accent": ACCENT_CYAN,
+    },
+    {
+        "name": "⚡ MAX STRESS",
+        "mode": "bruteforce",
+        "concurrency": 200,
+        "requests": 10000,
+        "description": "Extreme throughput and concurrency stress test",
+        "expected": "HTTP 200 + 429 (Heavy Rate Limiting)",
+        "accent": ACCENT_PURPLE,
+    },
+]
+
+
+# ── Background Stats Poller Thread ───────────────────────────────────────────
 
 class StatsPoller(QThread):
-    """Background thread that polls /stats every second and emits results."""
+    """Background thread polling /stats every second without blocking UI."""
 
     stats_received = pyqtSignal(dict)
-    stats_error    = pyqtSignal(str)
+    stats_error = pyqtSignal(str)
 
-    def __init__(self, url: str = "http://127.0.0.1:3000/stats", parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._url = url
         self._running = True
 
     def run(self):
         while self._running:
             try:
-                req = urllib.request.Request(self._url, method="GET")
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    data = json.loads(resp.read().decode())
-                self.stats_received.emit(data)
-            except Exception as exc:
-                self.stats_error.emit(str(exc))
-            self.msleep(1000)
+                req = urllib.request.Request("http://127.0.0.1:3000/stats")
+                with urllib.request.urlopen(req, timeout=1.0) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    self.stats_received.emit(data)
+            except Exception as e:
+                self.stats_error.emit(str(e))
+            
+            for _ in range(10):
+                if not self._running:
+                    break
+                time.sleep(0.1)
 
     def stop(self):
         self._running = False
-        self.wait(3000)
+        self.wait(2000)
 
 
-# ── Pulsing dot widget ───────────────────────────────────────────────────────
+# ── Pulsing Status Indicator Dot ─────────────────────────────────────────────
 
 class PulsingDot(QWidget):
-    """Small circle that pulses between bright and dim to indicate liveness."""
+    """Animated pulsing indicator dot for server status."""
 
-    def __init__(self, color: str = ACCENT_GREEN, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(14, 14)
-        self._color = QColor(color)
+        self.setFixedSize(12, 12)
+        self._color = QColor(COLOR_DANGER)
         self._opacity = 1.0
 
-        self._anim = QPropertyAnimation(self, b"opacity")
-        self._anim.setDuration(900)
-        self._anim.setStartValue(1.0)
-        self._anim.setEndValue(0.25)
-        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._anim.setLoopCount(-1)
-        self._anim.start()
+        self.anim = QPropertyAnimation(self, b"opacity")
+        self.anim.setDuration(900)
+        self.anim.setStartValue(1.0)
+        self.anim.setEndValue(0.25)
+        self.anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self.anim.setLoopCount(-1)
+        self.anim.start()
 
-    def get_opacity(self):
+    def set_color(self, color_str):
+        self._color = QColor(color_str)
+        self.update()
+
+    @pyqtProperty(float)
+    def opacity(self):
         return self._opacity
 
-    def set_opacity(self, v):
-        self._opacity = v
+    @opacity.setter
+    def opacity(self, val):
+        self._opacity = val
         self.update()
 
-    opacity = pyqtProperty(float, get_opacity, set_opacity)
-
-    def set_color(self, color: str):
-        self._color = QColor(color)
-        self.update()
-
-    def paintEvent(self, _event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         c = QColor(self._color)
         c.setAlphaF(self._opacity)
-        p.setBrush(QBrush(c))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(2, 2, 10, 10)
-        p.end()
+        painter.setBrush(QBrush(c))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, self.width(), self.height())
 
 
-# ── Status card ──────────────────────────────────────────────────────────────
+# ── Status Metric Card ───────────────────────────────────────────────────────
 
 class StatusCard(QFrame):
-    """A single metric card with a label and value."""
+    """Metric display card enclosed in a purple HUD border frame with transparent text backgrounds."""
 
-    def __init__(self, title: str, initial_value: str = "—", parent=None):
+    def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setObjectName("statusCard")
         self.setStyleSheet(f"""
-            #statusCard {{
+            QFrame#statusCard {{
                 background-color: {BG_CARD};
-                border: 1px solid {BORDER_CARD};
-                border-radius: 8px;
-                padding: 10px 16px;
+                border: 1px solid {BORDER_PURPLE_DIM};
+                border-radius: 4px;
+            }}
+            QFrame#statusCard:hover {{
+                background-color: {BG_CARD_HOVER};
+                border: 1px solid {BORDER_PURPLE};
             }}
         """)
+        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
+        
+        self.title_label = QLabel(title.upper())
+        self.title_label.setStyleSheet(f"""
+            color: {TEXT_DIM};
+            font-weight: bold;
+            font-size: 9px;
+            font-family: {MONO_FONT};
+            letter-spacing: 1px;
+            border: none;
+            background: transparent;
+        """)
+        
+        self.val_layout = QHBoxLayout()
+        self.val_layout.setContentsMargins(0, 0, 0, 0)
+        self.val_layout.setSpacing(6)
 
-        self._title_label = QLabel(title)
-        self._title_label.setFont(QFont(MONO_FONT, 9))
-        self._title_label.setStyleSheet(f"color: {TEXT_DIM}; background: transparent; border: none;")
-        layout.addWidget(self._title_label)
-
-        self._value_label = QLabel(initial_value)
-        self._value_label.setFont(QFont(MONO_FONT, 18, QFont.Weight.Bold))
-        self._value_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; border: none;")
-        layout.addWidget(self._value_label)
-
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_value(self, text: str, color: str | None = None):
-        self._value_label.setText(text)
+        self.val_label = QLabel("--")
+        self.val_label.setStyleSheet(f"""
+            color: {TEXT_PRIMARY};
+            font-weight: bold;
+            font-size: 16px;
+            font-family: {MONO_FONT};
+            border: none;
+            background: transparent;
+        """)
+        
+        self.val_layout.addWidget(self.val_label)
+        self.val_layout.addStretch()
+        
+        layout.addWidget(self.title_label)
+        layout.addLayout(self.val_layout)
+        
+    def set_value(self, text, color=None):
+        self.val_label.setText(text)
         c = color or TEXT_PRIMARY
-        self._value_label.setStyleSheet(f"color: {c}; background: transparent; border: none;")
+        self.val_label.setStyleSheet(f"""
+            color: {c};
+            font-weight: bold;
+            font-size: 16px;
+            font-family: {MONO_FONT};
+            border: none;
+            background: transparent;
+        """)
+
+    def add_widget(self, widget):
+        self.val_layout.insertWidget(0, widget)
 
 
-# ── Command input with history ───────────────────────────────────────────────
+# ── Monospace Command Input ──────────────────────────────────────────────────
 
 class CommandInput(QLineEdit):
-    """QLineEdit that supports command history via up/down arrows."""
+    """Terminal input field with command history navigation and transparent background."""
 
     command_submitted = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._history: list[str] = []
-        self._hist_idx = -1
-
-        self.setFont(QFont(MONO_FONT, 11))
-        self.setPlaceholderText("Enter command…")
+        self.history = []
+        self.history_idx = -1
         self.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {BG_DARKEST};
-                color: {ACCENT_GREEN};
-                border: 1px solid {BORDER_CARD};
+                background-color: {BG_VOID};
+                color: {ACCENT_PURPLE_LIGHT};
+                border: 1px solid {BORDER_PURPLE_DIM};
                 border-radius: 4px;
                 padding: 6px 10px;
-                selection-background-color: {ACCENT_CYAN};
+                font-family: {MONO_FONT};
+                font-size: 11px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {BORDER_PURPLE};
+                background-color: #05040a;
             }}
         """)
-        self.returnPressed.connect(self._on_submit)
-
-    def _on_submit(self):
-        cmd = self.text().strip()
-        if cmd:
-            self._history.append(cmd)
-            self._hist_idx = len(self._history)
-            self.command_submitted.emit(cmd)
-        self.clear()
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Up:
-            if self._history and self._hist_idx > 0:
-                self._hist_idx -= 1
-                self.setText(self._history[self._hist_idx])
-            return
-        if event.key() == Qt.Key.Key_Down:
-            if self._hist_idx < len(self._history) - 1:
-                self._hist_idx += 1
-                self.setText(self._history[self._hist_idx])
-            else:
-                self._hist_idx = len(self._history)
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            cmd = self.text().strip()
+            if cmd:
+                self.history.append(cmd)
+                self.history_idx = len(self.history)
+                self.command_submitted.emit(cmd)
                 self.clear()
-            return
-        super().keyPressEvent(event)
+        elif event.key() == Qt.Key.Key_Up:
+            if self.history and self.history_idx > 0:
+                self.history_idx -= 1
+                self.setText(self.history[self.history_idx])
+        elif event.key() == Qt.Key.Key_Down:
+            if self.history and self.history_idx < len(self.history) - 1:
+                self.history_idx += 1
+                self.setText(self.history[self.history_idx])
+            else:
+                self.history_idx = len(self.history)
+                self.clear()
+        else:
+            super().keyPressEvent(event)
 
 
-# ── Main window ──────────────────────────────────────────────────────────────
+# ── Stress Test Modal Dialog ─────────────────────────────────────────────────
+
+class StressTestDialog(QDialog):
+    """Modal dialog for selecting a stress test profile."""
+
+    preset_selected = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("[ VANGUARD V2 // STRESS TEST CONFIG ]")
+        self.setFixedSize(580, 640)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 6px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+
+        # Header Frame
+        title_frame = QFrame()
+        title_frame.setStyleSheet(f"""
+            background-color: {BG_CARD};
+            border: 1px solid {BORDER_PURPLE_DIM};
+            border-radius: 4px;
+            padding: 8px;
+        """)
+        tf_layout = QVBoxLayout(title_frame)
+        tf_layout.setContentsMargins(4, 4, 4, 4)
+
+        title = QLabel("⚡ [ SELECT STRESS TEST PROFILE ]")
+        title.setStyleSheet(f"color: {COLOR_WARN}; font-size: 15px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 2px; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tf_layout.addWidget(title)
+
+        desc = QLabel("SELECT PRESET PAYLOAD PROFILE TO STRESS TEST EDGE PROXY & WAF RULES")
+        desc.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; font-family: {MONO_FONT}; background: transparent;")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tf_layout.addWidget(desc)
+
+        layout.addWidget(title_frame)
+
+        # Preset Buttons
+        for preset in STRESS_PRESETS:
+            btn = QPushButton()
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BG_CARD};
+                    color: {TEXT_PRIMARY};
+                    border: 1px solid {BORDER_PURPLE_DIM};
+                    border-left: 4px solid {preset['accent']};
+                    border-radius: 4px;
+                    text-align: left;
+                    padding: 10px;
+                    font-family: {MONO_FONT};
+                }}
+                QPushButton:hover {{
+                    background-color: {BG_CARD_HOVER};
+                    border: 1px solid {BORDER_PURPLE};
+                    border-left: 4px solid {preset['accent']};
+                }}
+            """)
+            
+            btn_layout = QVBoxLayout(btn)
+            btn_layout.setContentsMargins(8, 4, 8, 4)
+            btn_layout.setSpacing(3)
+            
+            h_layout = QHBoxLayout()
+            name_lbl = QLabel(preset["name"].upper())
+            name_lbl.setStyleSheet(f"font-weight: bold; font-size: 12px; color: {preset['accent']}; font-family: {MONO_FONT}; background: transparent;")
+            stats_lbl = QLabel(f"CONC:{preset['concurrency']} | REQS:{preset['requests']} | MODE:{preset['mode'].upper()}")
+            stats_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; font-family: {MONO_FONT}; background: transparent;")
+            
+            h_layout.addWidget(name_lbl)
+            h_layout.addStretch()
+            h_layout.addWidget(stats_lbl)
+            
+            desc_lbl = QLabel(f"{preset['description']}  → EXPECT: {preset['expected']}")
+            desc_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; font-family: {MONO_FONT}; background: transparent;")
+            
+            btn_layout.addLayout(h_layout)
+            btn_layout.addWidget(desc_lbl)
+            
+            btn.clicked.connect(lambda checked, p=preset: self._on_preset_click(p))
+            layout.addWidget(btn)
+            
+        layout.addStretch()
+        
+        cancel_btn = QPushButton("✕ CANCEL")
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD};
+                color: {TEXT_DIM};
+                border: 1px solid {BORDER_PURPLE_DIM};
+                border-radius: 4px;
+                padding: 10px;
+                font-family: {MONO_FONT};
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #1a0b29;
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_PURPLE};
+            }}
+        """)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn)
+
+    def _on_preset_click(self, preset):
+        self.preset_selected.emit(preset)
+        self.accept()
+
+
+# ── Tactical Command Center Main Window ──────────────────────────────────────
 
 class VanguardControlCenter(QMainWindow):
-    """Top-level window for the VANGUARD Control Center."""
+    """Main Window implementing the Tactical Cyberpunk Breach HUD Layout."""
 
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("VANGUARD V2 // CONTROL CENTER")
+        self.setMinimumSize(1150, 780)
+        self.resize(1280, 840)
+        self.setStyleSheet(f"background-color: {BG_VOID};")
 
-        # ── Window chrome ────────────────────────────────────────────────
-        self.setWindowTitle("VANGUARD Control Center")
-        self.setMinimumSize(1000, 750)
-        self.resize(1200, 850)
-        self._set_icon()
+        self._processes = {}
+        self._external_pids = {}
+        self._stats_history = deque([0]*60, maxlen=60)
+        self._prev_total = None
+        self._prev_time = None
+        
+        self._init_ui()
+        
+        # Background Stats Poller Thread
+        self.poller = StatsPoller()
+        self.poller.stats_received.connect(self._on_stats)
+        self.poller.stats_error.connect(self._on_stats_error)
+        self.poller.start()
+        
+        # Process Discovery Timer (Sync external process state every 2s)
+        self.sync_timer = QTimer(self)
+        self.sync_timer.timeout.connect(self._sync_external_processes)
+        self.sync_timer.start(2000)
+        
+        # Live Chart Refresh Timer (1s)
+        self.chart_timer = QTimer(self)
+        self.chart_timer.timeout.connect(self._update_chart)
+        self.chart_timer.start(1000)
 
-        # ── State ────────────────────────────────────────────────────────
-        self._prev_total: int | None = None
-        self._prev_time: float | None = None
-        self._rps_history: deque[float] = deque(maxlen=60)
-        self._processes: dict[str, QProcess] = {}   # label -> QProcess
+        # Header Live Clock Timer (1s)
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(self._update_header_clock)
+        self.clock_timer.start(1000)
 
-        # ── Central widget ───────────────────────────────────────────────
-        central = QWidget()
-        central.setStyleSheet(f"background-color: {BG_DARKEST};")
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        self._term_write_system("VANGUARD CONTROL CENTER V2 INITIALIZED // PURPLE HACKER DASHBOARD ACTIVE.")
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setStyleSheet(f"""
-            QSplitter::handle {{
-                background: {BORDER_CARD};
-                height: 3px;
+    def _init_ui(self):
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(10)
+
+        # ── 1. TOP WARNING HEADER BAR ────────────────────────────────────────
+        header_panel = QFrame()
+        header_panel.setObjectName("headerPanel")
+        header_panel.setStyleSheet(f"""
+            QFrame#headerPanel {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 4px;
             }}
         """)
-        root_layout.addWidget(splitter)
+        hp_layout = QHBoxLayout(header_panel)
+        hp_layout.setContentsMargins(14, 8, 14, 8)
 
-        # ── Top panel (dashboard) ────────────────────────────────────────
-        top_panel = QWidget()
-        top_panel.setStyleSheet(f"background-color: {BG_DARK};")
-        top_layout = QVBoxLayout(top_panel)
-        top_layout.setContentsMargins(18, 14, 18, 10)
-        top_layout.setSpacing(12)
-
-        # Header
-        header = QLabel("⟨ VANGUARD  CONTROL  CENTER  v2 ⟩")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setFont(QFont(MONO_FONT, 22, QFont.Weight.Bold))
-        header.setStyleSheet(f"""
-            color: {ACCENT_GREEN};
-            padding: 10px;
-            letter-spacing: 4px;
-            background: qlineargradient(
-                x1:0, y1:0, x2:1, y2:0,
-                stop:0 {BG_DARKEST}, stop:0.5 #0d1f15, stop:1 {BG_DARKEST}
-            );
-            border: 1px solid #1a3a28;
-            border-radius: 6px;
+        warn_icon = QLabel("⚠️ ::")
+        warn_icon.setStyleSheet(f"color: {COLOR_WARN}; font-size: 14px; font-weight: bold; font-family: {MONO_FONT}; border: none; background: transparent;")
+        
+        header_title = QLabel("[ VANGUARD V2 // SECURITY CONTROL CENTER ]")
+        header_title.setStyleSheet(f"""
+            color: {ACCENT_PURPLE_LIGHT};
+            font-size: 15px;
+            font-weight: bold;
+            font-family: {MONO_FONT};
+            letter-spacing: 3px;
+            background: transparent;
+            border: none;
         """)
-        glow = QGraphicsDropShadowEffect()
-        glow.setBlurRadius(30)
-        glow.setColor(QColor(ACCENT_GREEN))
-        glow.setOffset(0, 0)
-        header.setGraphicsEffect(glow)
-        top_layout.addWidget(header)
 
-        # Status cards row
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)
+        warn_icon2 = QLabel(":: ⚠️")
+        warn_icon2.setStyleSheet(f"color: {COLOR_WARN}; font-size: 14px; font-weight: bold; font-family: {MONO_FONT}; border: none; background: transparent;")
 
-        self._card_status = StatusCard("SERVER STATUS", "OFFLINE")
-        self._dot = PulsingDot(COLOR_DANGER)
-        status_inner = QHBoxLayout()
-        status_inner.addWidget(self._dot)
-        status_inner.addWidget(self._card_status)
-        status_inner.setSpacing(6)
-        cards_row.addLayout(status_inner, 1)
+        self.timestamp_label = QLabel(f"TIMESTAMP: {datetime.now().strftime('%H:%M:%S')}")
+        self.timestamp_label.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 12px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 1px; border: none; background: transparent;")
 
-        self._card_uptime  = StatusCard("UPTIME", "—")
-        self._card_reqs    = StatusCard("TOTAL REQUESTS", "—")
-        self._card_conns   = StatusCard("ACTIVE CONNS", "—")
-        self._card_rps     = StatusCard("CURRENT RPS", "—")
+        hp_layout.addWidget(warn_icon)
+        hp_layout.addWidget(header_title)
+        hp_layout.addWidget(warn_icon2)
+        hp_layout.addStretch()
+        hp_layout.addWidget(self.timestamp_label)
 
-        for card in (self._card_uptime, self._card_reqs, self._card_conns, self._card_rps):
-            cards_row.addWidget(card, 1)
+        main_layout.addWidget(header_panel)
 
-        top_layout.addLayout(cards_row)
+        # ── 2. MAIN 3-COLUMN TACTICAL HUD SPLITTER ───────────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background-color: {BORDER_PURPLE_DIM};
+                width: 2px;
+            }}
+        """)
 
-        # Live chart
-        pg.setConfigOptions(antialias=True)
-        self._chart = pg.PlotWidget()
-        self._chart.setBackground(BG_DARKEST)
-        self._chart.setTitle("Requests Per Second (last 60 s)", color=TEXT_DIM, size="10pt")
-        self._chart.setLabel("left", "RPS", color=TEXT_DIM)
-        self._chart.setLabel("bottom", "Seconds Ago", color=TEXT_DIM)
-        self._chart.showGrid(x=True, y=True, alpha=0.15)
-        self._chart.setYRange(0, 10)
-        self._chart.setXRange(-60, 0)
-        self._chart.getAxis("bottom").setStyle(tickFont=QFont(MONO_FONT, 8))
-        self._chart.getAxis("left").setStyle(tickFont=QFont(MONO_FONT, 8))
-        self._chart.getAxis("bottom").setTextPen(pg.mkPen(TEXT_DIM))
-        self._chart.getAxis("left").setTextPen(pg.mkPen(TEXT_DIM))
+        # ── LEFT COLUMN: LIVE INTRUSION LOGS & TERMINAL ──
+        logs_panel = QFrame()
+        logs_panel.setObjectName("logsPanel")
+        logs_panel.setStyleSheet(f"""
+            QFrame#logsPanel {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 4px;
+            }}
+        """)
+        lp_layout = QVBoxLayout(logs_panel)
+        lp_layout.setContentsMargins(10, 10, 10, 10)
+        lp_layout.setSpacing(6)
 
-        grad = QLinearGradient(0, 0, 1, 0)
-        grad.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectMode)
-        grad.setColorAt(0, QColor(ACCENT_GREEN))
-        grad.setColorAt(1, QColor(ACCENT_CYAN))
+        logs_hdr = QLabel("[ LIVE INTRUSION EVENTS // LOG STREAM ]")
+        logs_hdr.setStyleSheet(f"color: {ACCENT_PURPLE}; font-size: 11px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 1px; border: none; background: transparent;")
+        lp_layout.addWidget(logs_hdr)
 
-        pen = pg.mkPen(color=QColor(ACCENT_CYAN), width=2)
-        self._curve = self._chart.plot([], [], pen=pen, fillLevel=0,
-                                        brush=pg.mkBrush(0, 204, 255, 30))
+        self.terminal = QTextEdit()
+        self.terminal.setReadOnly(True)
+        self.terminal.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {BG_VOID};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_PURPLE_DIM};
+                border-radius: 4px;
+                font-family: {MONO_FONT};
+                font-size: 11px;
+                padding: 6px;
+            }}
+            QScrollBar:vertical {{
+                background: {BG_VOID};
+                width: 8px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {BORDER_PURPLE_DIM};
+                min-height: 16px;
+                border-radius: 3px;
+            }}
+        """)
+        lp_layout.addWidget(self.terminal)
 
-        self._chart.setMinimumHeight(160)
-        self._chart.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        top_layout.addWidget(self._chart)
+        input_layout = QHBoxLayout()
+        input_layout.setSpacing(4)
+        prompt = QLabel("$")
+        prompt.setStyleSheet(f"color: {ACCENT_PURPLE_LIGHT}; font-weight: bold; font-family: {MONO_FONT}; font-size: 12px; border: none; background: transparent;")
+        self.cmd_input = CommandInput()
+        self.cmd_input.command_submitted.connect(self._on_manual_command)
+        input_layout.addWidget(prompt)
+        input_layout.addWidget(self.cmd_input)
+        lp_layout.addLayout(input_layout)
 
-        splitter.addWidget(top_panel)
+        splitter.addWidget(logs_panel)
 
-        # ── Bottom panel (controls + terminal) ───────────────────────────
-        bottom_panel = QWidget()
-        bottom_panel.setStyleSheet(f"background-color: {BG_DARKEST};")
-        bot_layout = QVBoxLayout(bottom_panel)
-        bot_layout.setContentsMargins(18, 8, 18, 12)
-        bot_layout.setSpacing(8)
+        # ── CENTER COLUMN: REALTIME RPS TRAFFIC MONITOR ──
+        center_panel = QFrame()
+        center_panel.setObjectName("centerPanel")
+        center_panel.setStyleSheet(f"""
+            QFrame#centerPanel {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 4px;
+            }}
+        """)
+        cp_layout = QVBoxLayout(center_panel)
+        cp_layout.setContentsMargins(10, 10, 10, 10)
+        cp_layout.setSpacing(8)
 
-        # Control buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        chart_hdr = QLabel("[ REALTIME RPS TRAFFIC MONITOR ]")
+        chart_hdr.setStyleSheet(f"color: {ACCENT_PURPLE}; font-size: 11px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 1px; border: none; background: transparent;")
+        cp_layout.addWidget(chart_hdr)
 
-        btn_style_template = """
+        # Status Banner Box
+        banner_box = QFrame()
+        banner_box.setStyleSheet(f"""
+            background-color: {BG_CARD};
+            border: 1px solid {BORDER_PURPLE_DIM};
+            border-radius: 4px;
+            padding: 6px;
+        """)
+        bb_layout = QHBoxLayout(banner_box)
+        bb_layout.setContentsMargins(10, 4, 10, 4)
+
+        self.banner_status_lbl = QLabel("[ SYSTEM STATUS: ONLINE ]")
+        self.banner_status_lbl.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold; font-size: 12px; font-family: {MONO_FONT}; border: none; background: transparent;")
+        self.banner_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bb_layout.addWidget(self.banner_status_lbl)
+        cp_layout.addWidget(banner_box)
+
+        # pyqtgraph RPS chart
+        pg.setConfigOption('background', BG_VOID)
+        pg.setConfigOption('foreground', TEXT_DIM)
+        self.chart_widget = pg.PlotWidget()
+        self.chart_widget.setStyleSheet(f"border: 1px solid {BORDER_PURPLE_DIM}; border-radius: 4px;")
+        self.chart_widget.showGrid(x=False, y=True, alpha=0.15)
+        self.chart_widget.setLabel('left', 'RPS', **{'font-family': 'Consolas', 'font-size': '8pt', 'color': TEXT_DIM})
+        self.chart_widget.setLabel('bottom', 'Seconds Ago', **{'font-family': 'Consolas', 'font-size': '8pt', 'color': TEXT_DIM})
+        self.chart_widget.setYRange(0, 10)
+        self.chart_widget.getAxis('left').setStyle(tickFont=QFont("Consolas", 8))
+        self.chart_widget.getAxis('bottom').setStyle(tickFont=QFont("Consolas", 8))
+        
+        pen = pg.mkPen(color=ACCENT_PURPLE, width=2)
+        brush = pg.mkBrush(color=QColor(168, 85, 247, 35))
+        self.curve = self.chart_widget.plot([], [], pen=pen, fillLevel=0, brush=brush)
+        
+        cp_layout.addWidget(self.chart_widget)
+        splitter.addWidget(center_panel)
+
+        # ── RIGHT COLUMN: CORE METRICS & PROCESS CONTROLS ──
+        right_panel = QFrame()
+        right_panel.setObjectName("rightPanel")
+        right_panel.setStyleSheet(f"""
+            QFrame#rightPanel {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 4px;
+            }}
+        """)
+        rp_layout = QVBoxLayout(right_panel)
+        rp_layout.setContentsMargins(10, 10, 10, 10)
+        rp_layout.setSpacing(10)
+
+        right_hdr = QLabel("[ CORE METRICS & CONTROLS ]")
+        right_hdr.setStyleSheet(f"color: {ACCENT_PURPLE}; font-size: 11px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 1px; border: none; background: transparent;")
+        rp_layout.addWidget(right_hdr)
+
+        # Status Cards Layout
+        cards_vlayout = QVBoxLayout()
+        cards_vlayout.setSpacing(6)
+
+        self.card_status = StatusCard("SERVER STATUS")
+        self.dot = PulsingDot()
+        self.card_status.add_widget(self.dot)
+        self.card_status.set_value("OFFLINE", COLOR_DANGER)
+        
+        self.card_uptime = StatusCard("UPTIME")
+        self.card_uptime.set_value("0s")
+        
+        self.card_requests = StatusCard("TOTAL REQUESTS")
+        self.card_requests.set_value("0")
+        
+        self.card_conns = StatusCard("ACTIVE CONNS")
+        self.card_conns.set_value("0")
+        
+        self.card_rps = StatusCard("CURRENT RPS")
+        self.card_rps.set_value("0.0")
+
+        cards_vlayout.addWidget(self.card_status)
+        cards_vlayout.addWidget(self.card_uptime)
+        cards_vlayout.addWidget(self.card_requests)
+        cards_vlayout.addWidget(self.card_conns)
+        cards_vlayout.addWidget(self.card_rps)
+
+        rp_layout.addLayout(cards_vlayout)
+        rp_layout.addSpacing(6)
+
+        # Controls Section
+        ctrl_title = QLabel("[ ACTION CONTROLS ]")
+        ctrl_title.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; font-weight: bold; font-family: {MONO_FONT}; letter-spacing: 1px; border: none; background: transparent;")
+        rp_layout.addWidget(ctrl_title)
+
+        self.btn_backend = QPushButton("▶ START BACKEND")
+        self.btn_backend.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_backend.clicked.connect(lambda: self._toggle_process("Backend", "./my_server", []))
+        
+        self.btn_proxy = QPushButton("▶ START PROXY")
+        self.btn_proxy.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_proxy.clicked.connect(lambda: self._toggle_process("Proxy", "./vanguard_proxy", []))
+        
+        self.btn_stress = QPushButton("⚡ LAUNCH STRESS TEST")
+        self.btn_stress.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stress.setStyleSheet(f"""
             QPushButton {{
-                background-color: {bg};
-                color: {fg};
-                border: 1px solid {border};
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-family: {font};
-                font-size: 12px;
+                background-color: #1a1204;
+                color: {COLOR_WARN};
+                border: 1px solid #d97706;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: {MONO_FONT};
                 font-weight: bold;
+                font-size: 10px;
                 letter-spacing: 1px;
             }}
             QPushButton:hover {{
-                background-color: {hover_bg};
-                border-color: {hover_border};
-            }}
-            QPushButton:pressed {{
-                background-color: {pressed_bg};
-            }}
-        """
-
-        self._btn_backend = QPushButton("▶  Start Backend")
-        self._btn_backend.setStyleSheet(btn_style_template.format(
-            bg="#0d2818", fg=ACCENT_GREEN, border="#1a4a2e", font=MONO_FONT,
-            hover_bg="#154030", hover_border=ACCENT_GREEN, pressed_bg="#0a1e12"))
-        self._btn_backend.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_backend.clicked.connect(lambda: self._run_process("Backend", "./my_server"))
-
-        self._btn_proxy = QPushButton("▶  Start Proxy")
-        self._btn_proxy.setStyleSheet(btn_style_template.format(
-            bg="#0d1e30", fg=ACCENT_CYAN, border="#1a3a5a", font=MONO_FONT,
-            hover_bg="#153050", hover_border=ACCENT_CYAN, pressed_bg="#0a1520"))
-        self._btn_proxy.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_proxy.clicked.connect(lambda: self._run_process("Proxy", "./vanguard_proxy"))
-
-        self._btn_stress = QPushButton("⚡  Stress Test")
-        self._btn_stress.setStyleSheet(btn_style_template.format(
-            bg="#2a1a00", fg=COLOR_WARN, border="#4a3000", font=MONO_FONT,
-            hover_bg="#3a2800", hover_border=COLOR_WARN, pressed_bg="#1a1000"))
-        self._btn_stress.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_stress.clicked.connect(
-            lambda: self._run_process("StressTest", "python3",
-                                      ["vanguard_stress.py", "-m", "bruteforce", "-c", "50", "-n", "1000"]))
-
-        btn_row.addWidget(self._btn_backend)
-        btn_row.addWidget(self._btn_proxy)
-        btn_row.addWidget(self._btn_stress)
-        bot_layout.addLayout(btn_row)
-
-        # Terminal output
-        self._terminal = QTextEdit()
-        self._terminal.setReadOnly(True)
-        self._terminal.setFont(QFont(MONO_FONT, 10))
-        self._terminal.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: #050505;
-                color: {ACCENT_GREEN};
-                border: 1px solid {BORDER_CARD};
-                border-radius: 4px;
-                padding: 8px;
-                selection-background-color: #224433;
-            }}
-            QScrollBar:vertical {{
-                background: {BG_DARKEST};
-                width: 10px;
-                border: none;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {BORDER_CARD};
-                border-radius: 5px;
-                min-height: 20px;
-            }}
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
-                height: 0px;
+                background-color: #2b1c06;
+                border: 1px solid {COLOR_WARN};
             }}
         """)
-        self._terminal.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        bot_layout.addWidget(self._terminal)
+        self.btn_stress.clicked.connect(self._open_stress_dialog)
+        
+        self._update_button_state("Backend", False)
+        self._update_button_state("Proxy", False)
+        
+        rp_layout.addWidget(self.btn_backend)
+        rp_layout.addWidget(self.btn_proxy)
+        rp_layout.addWidget(self.btn_stress)
 
-        # Command input row
-        cmd_row = QHBoxLayout()
-        cmd_row.setSpacing(6)
-        prompt_label = QLabel("$")
-        prompt_label.setFont(QFont(MONO_FONT, 13, QFont.Weight.Bold))
-        prompt_label.setStyleSheet(f"color: {ACCENT_GREEN}; background: transparent;")
-        prompt_label.setFixedWidth(18)
-        cmd_row.addWidget(prompt_label)
+        splitter.addWidget(logs_panel)
+        splitter.addWidget(center_panel)
+        splitter.addWidget(right_panel)
 
-        self._cmd_input = CommandInput()
-        self._cmd_input.command_submitted.connect(self._on_manual_command)
-        cmd_row.addWidget(self._cmd_input)
-        bot_layout.addLayout(cmd_row)
+        splitter.setSizes([340, 520, 320])
+        main_layout.addWidget(splitter)
 
-        splitter.addWidget(bottom_panel)
-        splitter.setStretchFactor(0, 5)
-        splitter.setStretchFactor(1, 4)
+        # ── 3. BOTTOM FOOTER BAR ─────────────────────────────────────────────
+        footer_panel = QFrame()
+        footer_panel.setStyleSheet(f"""
+            background-color: {BG_PANEL};
+            border: 1px solid {BORDER_PURPLE_DIM};
+            border-radius: 4px;
+            padding: 4px;
+        """)
+        fp_layout = QHBoxLayout(footer_panel)
+        fp_layout.setContentsMargins(10, 4, 10, 4)
 
-        # ── Stats poller ─────────────────────────────────────────────────
-        self._poller = StatsPoller()
-        self._poller.stats_received.connect(self._on_stats)
-        self._poller.stats_error.connect(self._on_stats_error)
-        self._poller.start()
+        footer_text = QLabel("VANGUARD-V2 :: EDGE PROXY & WAF ENGINE :: SYSTEM OPERATIONAL [0.0.0.0:8080 -> 127.0.0.1:3000]")
+        footer_text.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; font-family: {MONO_FONT}; border: none; background: transparent;")
+        fp_layout.addWidget(footer_text)
+        fp_layout.addStretch()
 
-        # Boot message
-        self._term_write_system("VANGUARD Control Center v2 initialized.")
-        self._term_write_system("Type commands below or use the control buttons.")
+        footer_right = QLabel("ALL SYSTEMS MONITORED")
+        footer_right.setStyleSheet(f"color: {ACCENT_PURPLE_LIGHT}; font-size: 10px; font-family: {MONO_FONT}; border: none; background: transparent;")
+        fp_layout.addWidget(footer_right)
 
-    # ── Icon helper ──────────────────────────────────────────────────────
+        main_layout.addWidget(footer_panel)
 
-    def _set_icon(self):
-        """Generate a simple green-V pixmap icon for the window."""
-        px = QPixmap(64, 64)
-        px.fill(QColor(BG_DARKEST))
-        painter = QPainter(px)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(ACCENT_GREEN), 5)
-        painter.setPen(pen)
-        painter.drawLine(10, 12, 32, 52)
-        painter.drawLine(32, 52, 54, 12)
-        painter.end()
-        self.setWindowIcon(QIcon(px))
+    def _update_header_clock(self):
+        self.timestamp_label.setText(f"TIMESTAMP: {datetime.now().strftime('%H:%M:%S')}")
 
-    # ── Terminal helpers ─────────────────────────────────────────────────
+    # ── Toggle Button Styling ────────────────────────────────────────────────
 
-    def _timestamp(self) -> str:
-        return datetime.now().strftime("%H:%M:%S")
+    def _update_button_state(self, label: str, is_running: bool):
+        if label == "Backend":
+            if is_running:
+                self.btn_backend.setText("■ STOP BACKEND")
+                self.btn_backend.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #280909;
+                        color: {COLOR_DANGER};
+                        border: 1px solid {COLOR_DANGER};
+                        border-radius: 4px;
+                        padding: 8px;
+                        font-family: {MONO_FONT};
+                        font-weight: bold;
+                        font-size: 10px;
+                        letter-spacing: 1px;
+                    }}
+                    QPushButton:hover {{ background-color: #3a0f0f; }}
+                """)
+            else:
+                self.btn_backend.setText("▶ START BACKEND")
+                self.btn_backend.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #130924;
+                        color: {ACCENT_PURPLE_LIGHT};
+                        border: 1px solid {BORDER_PURPLE};
+                        border-radius: 4px;
+                        padding: 8px;
+                        font-family: {MONO_FONT};
+                        font-weight: bold;
+                        font-size: 10px;
+                        letter-spacing: 1px;
+                    }}
+                    QPushButton:hover {{ background-color: #1e0d36; color: #ffffff; }}
+                """)
+        elif label == "Proxy":
+            if is_running:
+                self.btn_proxy.setText("■ STOP PROXY")
+                self.btn_proxy.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #280909;
+                        color: {COLOR_DANGER};
+                        border: 1px solid {COLOR_DANGER};
+                        border-radius: 4px;
+                        padding: 8px;
+                        font-family: {MONO_FONT};
+                        font-weight: bold;
+                        font-size: 10px;
+                        letter-spacing: 1px;
+                    }}
+                    QPushButton:hover {{ background-color: #3a0f0f; }}
+                """)
+            else:
+                self.btn_proxy.setText("▶ START PROXY")
+                self.btn_proxy.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #130924;
+                        color: {ACCENT_CYAN};
+                        border: 1px solid {ACCENT_CYAN};
+                        border-radius: 4px;
+                        padding: 8px;
+                        font-family: {MONO_FONT};
+                        font-weight: bold;
+                        font-size: 10px;
+                        letter-spacing: 1px;
+                    }}
+                    QPushButton:hover {{ background-color: #1e0d36; color: #ffffff; }}
+                """)
 
-    def _term_write_system(self, text: str):
-        self._terminal.append(
-            f'<span style="color:{TEXT_DIM}">[{self._timestamp()}]</span> '
-            f'<span style="color:{ACCENT_CYAN}">{text}</span>'
-        )
-        self._scroll_terminal()
+    # ── Terminal Logging Helpers (with ANSI-to-HTML Parser) ──────────────────
 
-    def _term_write_cmd(self, cmd: str):
-        self._terminal.append(
-            f'<span style="color:{TEXT_DIM}">[{self._timestamp()}]</span> '
-            f'<span style="color:{COLOR_WARN}">$</span> '
-            f'<span style="color:{TEXT_PRIMARY}">{cmd}</span>'
-        )
-        self._scroll_terminal()
+    def _term_write(self, html):
+        self.terminal.append(html)
+        self.terminal.moveCursor(QTextCursor.MoveOperation.End)
 
-    def _term_write_stdout(self, text: str):
-        # Escape HTML entities for safe display
-        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        for line in safe.splitlines():
-            self._terminal.append(
-                f'<span style="color:{ACCENT_GREEN}">{line}</span>'
-            )
-        self._scroll_terminal()
+    def _term_write_system(self, msg):
+        time_str = datetime.now().strftime("%H:%M:%S")
+        parsed_msg = ansi_to_html(msg)
+        self._term_write(f"<span style='color:{TEXT_MUTED}'>[{time_str}]</span> <span style='color:{ACCENT_PURPLE_LIGHT}'>[SYS]</span> {parsed_msg}")
 
-    def _term_write_stderr(self, text: str):
-        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        for line in safe.splitlines():
-            self._terminal.append(
-                f'<span style="color:{COLOR_DANGER}">{line}</span>'
-            )
-        self._scroll_terminal()
+    def _term_write_stdout(self, label, msg):
+        time_str = datetime.now().strftime("%H:%M:%S")
+        color = COLOR_SUCCESS if label == "Backend" else ACCENT_CYAN
+        parsed_msg = ansi_to_html(msg)
+        self._term_write(f"<span style='color:{TEXT_MUTED}'>[{time_str}]</span> <span style='color:{color}'>[{label.upper()}]</span> {parsed_msg}")
 
-    def _scroll_terminal(self):
-        cursor = self._terminal.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._terminal.setTextCursor(cursor)
-        self._terminal.ensureCursorVisible()
+    def _term_write_stderr(self, label, msg):
+        time_str = datetime.now().strftime("%H:%M:%S")
+        parsed_msg = ansi_to_html(msg)
+        self._term_write(f"<span style='color:{TEXT_MUTED}'>[{time_str}]</span> <span style='color:{COLOR_WARN}'>[{label.upper()} ERR]</span> {parsed_msg}")
 
-    # ── Process management ───────────────────────────────────────────────
+    # ── Service State & Process Management ──────────────────────────────────
 
-    def _run_process(self, label: str, program: str, args: list[str] | None = None):
-        """Start a QProcess and pipe its output into the terminal."""
-        if args is None:
-            args = []
+    def _is_service_running(self, label: str) -> bool:
+        if label in self._external_pids:
+            return True
+        if label in self._processes:
+            return self._processes[label].state() != QProcess.ProcessState.NotRunning
+        return False
 
-        # If a process with this label already exists and is running, notify
+    def _toggle_process(self, label, program, args):
+        if self._is_service_running(label):
+            self._stop_process(label)
+        else:
+            self._start_process(label, program, args)
+
+    def _start_process(self, label, program, args):
+        if label in self._processes and self._processes[label].state() != QProcess.ProcessState.NotRunning:
+            return
+            
+        proc = QProcess(self)
+        self._processes[label] = proc
+        
+        proc.readyReadStandardOutput.connect(lambda: self._on_proc_stdout(label))
+        proc.readyReadStandardError.connect(lambda: self._on_proc_stderr(label))
+        proc.finished.connect(lambda exitCode, exitStatus: self._on_proc_finished(label, exitCode, exitStatus))
+        
+        self._term_write_system(f"Launching {label}: {program} {' '.join(args)}")
+        proc.start(program, args)
+        self._update_button_state(label, True)
+
+    def _stop_process(self, label: str):
+        """Terminate managed or externally detected service gracefully with OS fallback."""
+        if label in self._external_pids:
+            pid = self._external_pids[label]
+            self._term_write_system(f"[{label.upper()}] Terminating external process (PID {pid})...")
+            killed = False
+            
+            if HAS_PSUTIL:
+                service_names = {"Backend": "my_server", "Proxy": "vanguard_proxy"}
+                target_name = service_names.get(label, "")
+                
+                for proc in psutil.process_iter(['pid', 'name']):
+                    try:
+                        pname = proc.info['name'] or ''
+                        if pname == target_name or pname == f"{target_name}.exe" or pname.startswith(target_name):
+                            self._term_write_system(f"[{label.upper()}] Terminating {pname} (PID {proc.info['pid']})...")
+                            p = psutil.Process(proc.info['pid'])
+                            p.terminate()
+                            try:
+                                p.wait(timeout=3)
+                                killed = True
+                            except psutil.TimeoutExpired:
+                                p.kill()
+                                p.wait(timeout=2)
+                                killed = True
+                                self._term_write_system(f"[{label.upper()}] Force-killed PID {proc.info['pid']}.")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError) as e:
+                        self._term_write_stderr(label, f"Error stopping PID: {e}")
+                        continue
+            
+            if not killed:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    killed = True
+                    self._term_write_system(f"[{label.upper()}] Sent SIGTERM to PID {pid}.")
+                except (ProcessLookupError, PermissionError, OSError) as e:
+                    self._term_write_stderr(label, f"OS kill fallback failed: {e}")
+            
+            if label in self._external_pids:
+                del self._external_pids[label]
+            self._update_button_state(label, False)
+            
+            if killed:
+                self._term_write_system(f"[{label.upper()}] External process terminated.")
+            else:
+                self._term_write_stderr(label, "Could not terminate external process.")
+            return
+
         if label in self._processes:
             proc = self._processes[label]
             if proc.state() != QProcess.ProcessState.NotRunning:
-                self._term_write_system(f"[{label}] process is already running (PID {proc.processId()}).")
+                pid = proc.processId()
+                self._term_write_system(f"[{label.upper()}] Stopping managed process (PID {pid})...")
+                proc.terminate()
+                if not proc.waitForFinished(3000):
+                    proc.kill()
+                    proc.waitForFinished(2000)
+                    self._term_write_system(f"[{label.upper()}] Force-killed PID {pid}.")
                 return
 
-        full_cmd = program + (" " + " ".join(args) if args else "")
-        self._term_write_cmd(full_cmd)
-        self._term_write_system(f"[{label}] Starting…")
+        self._term_write_system(f"[{label.upper()}] No running process found.")
 
-        proc = QProcess(self)
-        proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+    def _on_proc_stdout(self, label):
+        proc = self._processes.get(label)
+        if proc:
+            data = proc.readAllStandardOutput().data().decode('utf-8', errors='replace').strip()
+            if data:
+                for line in data.split('\n'):
+                    self._term_write_stdout(label, line)
 
-        # Capture label in closures
-        proc.readyReadStandardOutput.connect(lambda p=proc: self._on_proc_stdout(p))
-        proc.readyReadStandardError.connect(lambda p=proc: self._on_proc_stderr(p))
-        proc.finished.connect(lambda code, status, lb=label: self._on_proc_finished(lb, code, status))
+    def _on_proc_stderr(self, label):
+        proc = self._processes.get(label)
+        if proc:
+            data = proc.readAllStandardError().data().decode('utf-8', errors='replace').strip()
+            if data:
+                for line in data.split('\n'):
+                    self._term_write_stderr(label, line)
 
-        self._processes[label] = proc
-        proc.start(program, args)
+    def _on_proc_finished(self, label, exitCode, exitStatus):
+        self._term_write_system(f"[{label.upper()}] Process exited (Code: {exitCode})")
+        self._update_button_state(label, False)
 
-    def _on_proc_stdout(self, proc: QProcess):
-        data = proc.readAllStandardOutput()
-        if data:
-            text = bytes(data).decode("utf-8", errors="replace")
-            self._term_write_stdout(text)
+    # ── Process Discovery Sync (Terminal Sync) ───────────────────────────────
 
-    def _on_proc_stderr(self, proc: QProcess):
-        data = proc.readAllStandardError()
-        if data:
-            text = bytes(data).decode("utf-8", errors="replace")
-            self._term_write_stderr(text)
+    def _sync_external_processes(self):
+        """Scans system processes to sync external terminal executions with GUI buttons."""
+        services = {"Backend": "my_server", "Proxy": "vanguard_proxy"}
+        
+        for label, name in services.items():
+            if label in self._processes and self._processes[label].state() != QProcess.ProcessState.NotRunning:
+                continue
+                
+            pid = self._find_external_process(name)
+            if pid:
+                if label not in self._external_pids:
+                    self._external_pids[label] = pid
+                    self._update_button_state(label, True)
+                    self._term_write_system(f"[{label.upper()}] External process detected via Terminal Sync (PID {pid})")
+            else:
+                if label in self._external_pids:
+                    del self._external_pids[label]
+                    self._update_button_state(label, False)
+                    self._term_write_system(f"[{label.upper()}] External process terminated externally.")
 
-    def _on_proc_finished(self, label: str, exit_code: int, _status):
-        color = ACCENT_GREEN if exit_code == 0 else COLOR_DANGER
-        self._terminal.append(
-            f'<span style="color:{TEXT_DIM}">[{self._timestamp()}]</span> '
-            f'<span style="color:{color}">[{label}] Process exited with code {exit_code}</span>'
-        )
-        self._scroll_terminal()
+    def _find_external_process(self, name: str) -> int | None:
+        if not HAS_PSUTIL:
+            return None
+        try:
+            my_pid = os.getpid()
+            managed_pids = set()
+            for proc in self._processes.values():
+                if proc.state() != QProcess.ProcessState.NotRunning:
+                    managed_pids.add(proc.processId())
+            
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    pinfo = proc.info
+                    pid = pinfo['pid']
+                    pname = pinfo['name'] or ''
+                    if pid == my_pid or pid in managed_pids:
+                        continue
+                    if pname == name or pname == f"{name}.exe" or pname.startswith(name):
+                        return pid
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+        return None
 
-    def _on_manual_command(self, cmd: str):
-        """Execute an arbitrary shell command typed by the user."""
-        self._term_write_cmd(cmd)
+    # ── Manual Console Command Handler ───────────────────────────────────────
 
+    def _on_manual_command(self, cmd):
+        self._term_write_system(f"Executing: {cmd}")
         parts = cmd.split()
         if not parts:
             return
-
-        program = parts[0]
-        args = parts[1:]
-
+        
         proc = QProcess(self)
-        proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
-        proc.readyReadStandardOutput.connect(lambda p=proc: self._on_proc_stdout(p))
-        proc.readyReadStandardError.connect(lambda p=proc: self._on_proc_stderr(p))
-        proc.finished.connect(lambda code, status: self._on_proc_finished("cmd", code, status))
+        proc.readyReadStandardOutput.connect(lambda: self._term_write_stdout("CMD", proc.readAllStandardOutput().data().decode('utf-8', errors='replace')))
+        proc.readyReadStandardError.connect(lambda: self._term_write_stderr("CMD", proc.readAllStandardError().data().decode('utf-8', errors='replace')))
+        
+        proc.start(parts[0], parts[1:])
+        
+        if not hasattr(self, '_manual_procs'):
+            self._manual_procs = []
+        self._manual_procs.append(proc)
+        proc.finished.connect(lambda: self._manual_procs.remove(proc) if proc in self._manual_procs else None)
 
-        # Store under a unique key so it doesn't collide
-        key = f"manual_{id(proc)}"
-        self._processes[key] = proc
-        proc.start(program, args)
+    # ── Stress Test Modal Launch ─────────────────────────────────────────────
 
-    # ── Stats handling ───────────────────────────────────────────────────
+    def _open_stress_dialog(self):
+        dlg = StressTestDialog(self)
+        dlg.preset_selected.connect(self._run_stress_preset)
+        dlg.exec()
 
-    def _on_stats(self, data: dict):
+    def _run_stress_preset(self, preset):
+        self._term_write_system(f"Launching Stress Test Preset: {preset['name']}")
+        args = ["vanguard_stress.py", "-m", preset["mode"], "-c", str(preset["concurrency"]), "-n", str(preset["requests"])]
+        self._start_process("StressTest", sys.executable, args)
+
+    # ── Metrics Polling & Chart Update ───────────────────────────────────────
+
+    def _on_stats(self, data):
         now = time.monotonic()
+        self.dot.set_color(COLOR_SUCCESS)
 
         # Status
         status = data.get("status", "unknown")
         if status == "online":
-            self._card_status.set_value("ONLINE", ACCENT_GREEN)
-            self._dot.set_color(ACCENT_GREEN)
+            self.card_status.set_value("ONLINE", COLOR_SUCCESS)
+            self.banner_status_lbl.setText("[ SYSTEM STATUS: ONLINE // PROXY ACTIVE ]")
+            self.banner_status_lbl.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold; font-size: 12px; font-family: {MONO_FONT}; border: none; background: transparent;")
         else:
-            self._card_status.set_value(status.upper(), COLOR_WARN)
-            self._dot.set_color(COLOR_WARN)
+            self.card_status.set_value(status.upper(), COLOR_WARN)
+            self.banner_status_lbl.setText(f"[ SYSTEM STATUS: {status.upper()} ]")
+            self.banner_status_lbl.setStyleSheet(f"color: {COLOR_WARN}; font-weight: bold; font-size: 12px; font-family: {MONO_FONT}; border: none; background: transparent;")
 
         # Uptime
         secs = int(data.get("uptime_seconds", 0))
         d, rem = divmod(secs, 86400)
         h, rem = divmod(rem, 3600)
-        m, s   = divmod(rem, 60)
+        m, s = divmod(rem, 60)
         parts = []
         if d: parts.append(f"{d}d")
         if h or d: parts.append(f"{h}h")
-        parts.append(f"{m}m")
-        parts.append(f"{s}s")
-        self._card_uptime.set_value(" ".join(parts), ACCENT_CYAN)
+        parts.append(f"{m}m {s}s")
+        self.card_uptime.set_value(" ".join(parts), ACCENT_CYAN)
 
         # Total requests
         total = int(data.get("total_requests", 0))
-        self._card_reqs.set_value(f"{total:,}", TEXT_PRIMARY)
+        self.card_requests.set_value(f"{total:,}", TEXT_PRIMARY)
 
         # Active connections
         conns = int(data.get("active_connections", 0))
         if conns < 10:
-            conn_color = ACCENT_GREEN
+            conn_color = COLOR_SUCCESS
         elif conns < 50:
             conn_color = COLOR_WARN
         else:
             conn_color = COLOR_DANGER
-        self._card_conns.set_value(str(conns), conn_color)
+        self.card_conns.set_value(str(conns), conn_color)
 
         # RPS calculation
         rps = 0.0
@@ -619,67 +1157,68 @@ class VanguardControlCenter(QMainWindow):
                 rps = max(0.0, (total - self._prev_total) / dt)
         self._prev_total = total
         self._prev_time = now
-        self._rps_history.append(rps)
+        self._stats_history.append(rps)
 
-        self._card_rps.set_value(f"{rps:.1f}", ACCENT_GREEN if rps < 100 else COLOR_WARN)
+        self.card_rps.set_value(f"{rps:.1f}", ACCENT_PURPLE_LIGHT if rps < 100 else COLOR_WARN)
 
-        # Update chart
-        self._update_chart()
-
-    def _on_stats_error(self, _msg: str):
-        self._card_status.set_value("OFFLINE", COLOR_DANGER)
-        self._dot.set_color(COLOR_DANGER)
-        self._card_uptime.set_value("—", TEXT_DIM)
-        self._card_reqs.set_value("—", TEXT_DIM)
-        self._card_conns.set_value("—", TEXT_DIM)
-        self._card_rps.set_value("—", TEXT_DIM)
-        self._rps_history.append(0.0)
-        self._update_chart()
+    def _on_stats_error(self, msg):
+        self.dot.set_color(COLOR_DANGER)
+        self.card_status.set_value("OFFLINE", COLOR_DANGER)
+        self.banner_status_lbl.setText("[ SYSTEM STATUS: OFFLINE // NO BACKEND DETECTED ]")
+        self.banner_status_lbl.setStyleSheet(f"color: {COLOR_DANGER}; font-weight: bold; font-size: 12px; font-family: {MONO_FONT}; border: none; background: transparent;")
+        self.card_uptime.set_value("—", TEXT_DIM)
+        self.card_requests.set_value("—", TEXT_DIM)
+        self.card_conns.set_value("—", TEXT_DIM)
+        self.card_rps.set_value("—", TEXT_DIM)
+        self._stats_history.append(0)
 
     def _update_chart(self):
-        n = len(self._rps_history)
-        x = list(range(-n + 1, 1))  # e.g. [-59, -58, …, 0]
-        y = list(self._rps_history)
-        self._curve.setData(x, y)
-
+        n = len(self._stats_history)
+        x = list(range(-n + 1, 1))
+        y = list(self._stats_history)
+        self.curve.setData(x, y)
         if y:
             max_y = max(max(y) * 1.2, 5)
-            self._chart.setYRange(0, max_y)
-
-    # ── Cleanup ──────────────────────────────────────────────────────────
+            self.chart_widget.setYRange(0, max_y)
 
     def closeEvent(self, event):
-        # Stop the poller thread
-        self._poller.stop()
-
-        # Kill all child processes
+        self.sync_timer.stop()
+        self.chart_timer.stop()
+        self.clock_timer.stop()
+        self.poller.stop()
+        
         for label, proc in self._processes.items():
             if proc.state() != QProcess.ProcessState.NotRunning:
                 proc.kill()
-                proc.waitForFinished(2000)
-
+                proc.waitForFinished(1000)
+                
+        if hasattr(self, '_manual_procs'):
+            for proc in self._manual_procs:
+                if proc.state() != QProcess.ProcessState.NotRunning:
+                    proc.kill()
+                    
         event.accept()
 
 
-# ── Entry point ──────────────────────────────────────────────────────────────
+# ── Application Main Entry Point ─────────────────────────────────────────────
 
 def main():
     app = QApplication(sys.argv)
-
-    # Global dark palette as fallback
+    
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window,          QColor(BG_DARKEST))
-    palette.setColor(QPalette.ColorRole.WindowText,      QColor(TEXT_PRIMARY))
-    palette.setColor(QPalette.ColorRole.Base,            QColor(BG_DARK))
-    palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(BG_CARD))
-    palette.setColor(QPalette.ColorRole.Text,            QColor(TEXT_PRIMARY))
-    palette.setColor(QPalette.ColorRole.Button,          QColor(BG_CARD))
-    palette.setColor(QPalette.ColorRole.ButtonText,      QColor(TEXT_PRIMARY))
-    palette.setColor(QPalette.ColorRole.Highlight,       QColor(ACCENT_CYAN))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(BG_DARKEST))
+    palette.setColor(QPalette.ColorRole.Window, QColor(BG_VOID))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Base, QColor(BG_PANEL))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(BG_CARD))
+    palette.setColor(QPalette.ColorRole.Text, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Button, QColor(BG_CARD))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT_PURPLE))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(BG_VOID))
     app.setPalette(palette)
-    app.setFont(QFont(MONO_FONT, 10))
-
+    
+    app.setFont(QFont("Consolas", 10))
+    
     window = VanguardControlCenter()
     window.show()
     sys.exit(app.exec())
