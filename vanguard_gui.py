@@ -214,6 +214,56 @@ class StatsPoller(QThread):
         self.wait(2000)
 
 
+# ── AI Agent Background Worker Thread ────────────────────────────────────────
+
+class AgentWorkerThread(QThread):
+    """Background thread running VanguardAIAgent analysis without blocking the UI."""
+
+    thought = pyqtSignal(str, str)         # (tag, message)
+    ban_ready = pyqtSignal(str, str, str)  # (ip, reason, firestore_doc_id)
+    error = pyqtSignal(str)
+
+    def __init__(self, agent, log_entry: str, parent=None):
+        super().__init__(parent)
+        self.agent = agent
+        self.log_entry = log_entry
+
+    def run(self):
+        try:
+            self.thought.emit("SYSTEM", "Anomaly detected — processing suspicious log…")
+            time.sleep(0.3)
+
+            self.thought.emit("AI", "Calling Gemini 3.5 Flash for threat analysis…")
+            result = self.agent.analyze_threat(self.log_entry)
+
+            action = result.get("action", "").lower()
+            ip = result.get("ip", "unknown")
+            reason = result.get("reason", "Malicious activity detected")
+
+            self.thought.emit("AI", f"Threat: {reason}. Action: {action.upper()}. Target IP: {ip}")
+
+            if action == "ban" and ip and ip.lower() != "unknown":
+                self.thought.emit("AI", "Executing Auto-Ban pipeline…")
+
+                doc_id = ""
+                if self.agent.db:
+                    try:
+                        doc_id = self.agent.log_to_firestore(ip=ip, reason=reason)
+                        self.thought.emit("FIRESTORE", f"Threat logged to Firestore — Doc ID: {doc_id}")
+                    except Exception as e:
+                        self.thought.emit("ERROR", f"Firestore logging failed: {e}")
+                else:
+                    self.thought.emit("SYSTEM", "Firestore not configured — skipping cloud log.")
+
+                self.ban_ready.emit(ip, reason, doc_id)
+            else:
+                self.thought.emit("SYSTEM", f"Analysis complete — no ban action required (action={action})")
+
+        except Exception as e:
+            self.thought.emit("ERROR", f"Agent pipeline failed: {e}")
+            self.error.emit(str(e))
+
+
 # ── Pulsing Status Indicator Dot ─────────────────────────────────────────────
 
 class PulsingDot(QWidget):
@@ -513,6 +563,10 @@ class VanguardControlCenter(QMainWindow):
         self._stats_history = deque([0]*60, maxlen=60)
         self._prev_total = None
         self._prev_time = None
+
+        # AI SOC Agent (lazy-initialized on first use)
+        self._ai_agent = None
+        self._agent_thread = None
         
         self._init_ui()
         
@@ -785,6 +839,29 @@ class VanguardControlCenter(QMainWindow):
             }}
         """)
         self.btn_stress.clicked.connect(self._open_stress_dialog)
+
+        # AI Analyze Button
+        self.btn_ai_analyze = QPushButton("🧠 AI ANALYZE LOG")
+        self.btn_ai_analyze.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ai_analyze.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #0a1a24;
+                color: {ACCENT_CYAN};
+                border: 1px solid {ACCENT_CYAN};
+                border-radius: 4px;
+                padding: 8px;
+                font-family: {MONO_FONT};
+                font-weight: bold;
+                font-size: 10px;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                background-color: #0d2836;
+                color: #ffffff;
+                border: 1px solid {BORDER_PURPLE_GLOW};
+            }}
+        """)
+        self.btn_ai_analyze.clicked.connect(lambda: self._launch_ai_analysis())
         
         self._update_button_state("Backend", False)
         self._update_button_state("Proxy", False)
@@ -792,6 +869,7 @@ class VanguardControlCenter(QMainWindow):
         rp_layout.addWidget(self.btn_backend)
         rp_layout.addWidget(self.btn_proxy)
         rp_layout.addWidget(self.btn_stress)
+        rp_layout.addWidget(self.btn_ai_analyze)
 
         splitter.addWidget(logs_panel)
         splitter.addWidget(center_panel)
@@ -800,7 +878,60 @@ class VanguardControlCenter(QMainWindow):
         splitter.setSizes([340, 520, 320])
         main_layout.addWidget(splitter)
 
-        # ── 3. BOTTOM FOOTER BAR ─────────────────────────────────────────────
+        # ── 3. AI AGENT THOUGHT PROCESS PANEL ────────────────────────────────
+        ai_panel = QFrame()
+        ai_panel.setObjectName("aiPanel")
+        ai_panel.setStyleSheet(f"""
+            QFrame#aiPanel {{
+                background-color: {BG_PANEL};
+                border: 1px solid {BORDER_PURPLE};
+                border-radius: 4px;
+            }}
+        """)
+        ai_layout = QVBoxLayout(ai_panel)
+        ai_layout.setContentsMargins(10, 8, 10, 8)
+        ai_layout.setSpacing(4)
+
+        ai_hdr = QLabel("[ AI AGENT THOUGHT PROCESS ]")
+        ai_hdr.setStyleSheet(f"""
+            color: {ACCENT_PURPLE};
+            font-size: 11px;
+            font-weight: bold;
+            font-family: {MONO_FONT};
+            letter-spacing: 1px;
+            border: none;
+            background: transparent;
+        """)
+        ai_layout.addWidget(ai_hdr)
+
+        self.ai_thought_box = QTextEdit()
+        self.ai_thought_box.setReadOnly(True)
+        self.ai_thought_box.setFixedHeight(130)
+        self.ai_thought_box.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {BG_VOID};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_PURPLE_DIM};
+                border-radius: 4px;
+                font-family: {MONO_FONT};
+                font-size: 11px;
+                padding: 6px;
+            }}
+            QScrollBar:vertical {{
+                background: {BG_VOID};
+                width: 8px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {BORDER_PURPLE_DIM};
+                min-height: 16px;
+                border-radius: 3px;
+            }}
+        """)
+        ai_layout.addWidget(self.ai_thought_box)
+
+        main_layout.addWidget(ai_panel)
+
+        # ── 4. BOTTOM FOOTER BAR ─────────────────────────────────────────────
         footer_panel = QFrame()
         footer_panel.setStyleSheet(f"""
             background-color: {BG_PANEL};
@@ -1079,6 +1210,16 @@ class VanguardControlCenter(QMainWindow):
     # ── Manual Console Command Handler ───────────────────────────────────────
 
     def _on_manual_command(self, cmd):
+        # AI agent analyze shortcut
+        if cmd.lower().startswith("analyze "):
+            log_entry = cmd[8:].strip()
+            if log_entry:
+                self._term_write_system(f"AI Analyze: {log_entry[:80]}")
+                self._launch_ai_analysis(log_entry)
+            else:
+                self._ai_thought_write("ERROR", "Usage: analyze <log_entry>")
+            return
+
         self._term_write_system(f"Executing: {cmd}")
         parts = cmd.split()
         if not parts:
@@ -1106,6 +1247,106 @@ class VanguardControlCenter(QMainWindow):
         self._term_write_system(f"Launching Stress Test Preset: {preset['name']}")
         args = ["vanguard_stress.py", "-m", preset["mode"], "-c", str(preset["concurrency"]), "-n", str(preset["requests"])]
         self._start_process("StressTest", sys.executable, args)
+
+    # ── AI SOC Agent — Thought Process & Auto-Ban Pipeline ───────────────────
+
+    def _ai_thought_write(self, tag: str, message: str):
+        """Write a tagged message to the AI Thought Process box."""
+        time_str = datetime.now().strftime("%H:%M:%S")
+        tag_colors = {
+            "SYSTEM": ACCENT_PURPLE_LIGHT,
+            "AI":     ACCENT_CYAN,
+            "FIRESTORE": COLOR_SUCCESS,
+            "BAN":    COLOR_DANGER,
+            "ERROR":  COLOR_DANGER,
+        }
+        color = tag_colors.get(tag, TEXT_DIM)
+        self.ai_thought_box.append(
+            f"<span style='color:{TEXT_MUTED}'>[{time_str}]</span> "
+            f"<span style='color:{color}'>[{tag}]</span> "
+            f"<span style='color:{TEXT_PRIMARY}'>{message}</span>"
+        )
+        self.ai_thought_box.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _append_to_blacklist(self, ip: str, reason: str):
+        """Append banned IP to blacklist.conf, avoiding duplicates."""
+        blacklist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.conf")
+
+        # Check for duplicate
+        existing_ips = set()
+        if os.path.exists(blacklist_path):
+            with open(blacklist_path, "r") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        existing_ips.add(stripped.split("#")[0].strip())
+
+        if ip in existing_ips:
+            self._ai_thought_write("BAN", f"IP {ip} already in blacklist.conf — skipping duplicate.")
+            return
+
+        with open(blacklist_path, "a") as f:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"{ip}    # {reason} — banned {timestamp}\n")
+
+        self._ai_thought_write("BAN", f"IP {ip} appended to blacklist.conf")
+        self._term_write_system(f"[AI AUTO-BAN] IP {ip} added to blacklist.conf — Reason: {reason}")
+
+    def _restart_proxy(self):
+        """Terminate and restart vanguard_proxy to reload blacklist."""
+        self._ai_thought_write("SYSTEM", "Terminating vanguard_proxy to reload blacklist…")
+
+        if self._is_service_running("Proxy"):
+            self._stop_process("Proxy")
+            # Brief delay to allow clean shutdown before restart
+            QTimer.singleShot(1500, self._do_restart_proxy)
+        else:
+            self._ai_thought_write("SYSTEM", "Proxy was not running — starting fresh.")
+            self._do_restart_proxy()
+
+    def _do_restart_proxy(self):
+        """Delayed restart callback after proxy termination."""
+        self._start_process("Proxy", "./vanguard_proxy", [])
+        self._ai_thought_write("SYSTEM", "vanguard_proxy restarted with updated blacklist.")
+
+    def _on_ban_ready(self, ip: str, reason: str, doc_id: str):
+        """Auto-ban pipeline: append to blacklist → restart proxy."""
+        self._append_to_blacklist(ip, reason)
+        self._restart_proxy()
+        self._ai_thought_write("SYSTEM", "═══ Auto-Ban pipeline complete. Proxy reloaded. ═══")
+
+    def _launch_ai_analysis(self, log_entry: str = None):
+        """Launch AI analysis on a given log line, or the last terminal line."""
+        # Lazy-initialize agent
+        if self._ai_agent is None:
+            try:
+                self._ai_agent = VanguardAIAgent()
+                self._ai_thought_write("SYSTEM", "VanguardAIAgent initialized successfully.")
+            except ValueError as e:
+                self._ai_thought_write("ERROR", str(e))
+                return
+
+        if log_entry is None:
+            # Extract the last 15 lines as a context block for Gemini
+            text = self.terminal.toPlainText()
+            lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+
+            if not lines:
+                self._ai_thought_write("SYSTEM", "No log entries in terminal to analyze.")
+                return
+
+            context_lines = lines[-15:]
+            log_entry = "\n".join(context_lines)
+            self._ai_thought_write("SYSTEM", f"Extracted {len(context_lines)} log lines for contextual analysis.")
+
+        display = (log_entry[:120] + "…") if len(log_entry) > 120 else log_entry
+        self._ai_thought_write("SYSTEM", f"Selected log: {display}")
+
+        self._agent_thread = AgentWorkerThread(self._ai_agent, log_entry, parent=self)
+        self._agent_thread.thought.connect(self._ai_thought_write)
+        self._agent_thread.ban_ready.connect(self._on_ban_ready)
+        self._agent_thread.error.connect(lambda e: self._term_write_stderr("AI", e))
+        self._agent_thread.start()
 
     # ── Metrics Polling & Chart Update ───────────────────────────────────────
 
@@ -1186,6 +1427,11 @@ class VanguardControlCenter(QMainWindow):
         self.chart_timer.stop()
         self.clock_timer.stop()
         self.poller.stop()
+
+        # Stop AI agent thread if running
+        if self._agent_thread and self._agent_thread.isRunning():
+            self._agent_thread.quit()
+            self._agent_thread.wait(2000)
         
         for label, proc in self._processes.items():
             if proc.state() != QProcess.ProcessState.NotRunning:

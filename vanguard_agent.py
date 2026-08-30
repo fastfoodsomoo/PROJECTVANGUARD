@@ -8,9 +8,15 @@ from google import genai
 from google.genai import types
 from google.cloud import firestore
 
+# Retry logic for transient API failures
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 # Setup Logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("VanguardAIAgent")
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+REQUIRED_RESPONSE_KEYS = {"action", "ip", "reason"}
 
 
 class VanguardAIAgent:
@@ -43,9 +49,21 @@ class VanguardAIAgent:
             logger.warning(f"Firestore Client warning: {e}. (Set GOOGLE_APPLICATION_CREDENTIALS if needed)")
             self.db = None
 
+    # ─── Gemini Analysis with Retry & Validation ──────────────────────────
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError, json.JSONDecodeError)),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Gemini API call failed (attempt {retry_state.attempt_number}/3), retrying…"
+        ),
+        reraise=True,
+    )
     def analyze_threat(self, log_entry: str) -> Dict[str, Any]:
         """
         ส่ง Log ไปให้ Gemini 3.5 Flash วิเคราะห์และคืนค่า JSON
+        Retries up to 3 times on transient failures.
+        Validates that the response contains all required keys.
         """
         system_instruction = (
             "You are an expert Autonomous SOC / Cybersecurity AI Agent embedded in a high-performance WAF & Edge Proxy. "
@@ -73,9 +91,24 @@ class VanguardAIAgent:
 
             raw_text = response.text.strip()
             result: Dict[str, Any] = json.loads(raw_text)
+
+            # ── Input Validation ──────────────────────────────────────
+            missing_keys = REQUIRED_RESPONSE_KEYS - result.keys()
+            if missing_keys:
+                raise ValueError(
+                    f"Gemini response missing required keys: {missing_keys}. "
+                    f"Got: {result}"
+                )
+
+            if not result["ip"] or result["ip"].lower() == "unknown":
+                logger.warning(f"Gemini returned non-actionable IP: '{result['ip']}'")
+
             logger.info(f"Threat Analyzed - IP: {result.get('ip')}, Action: {result.get('action')}")
             return result
 
+        except (json.JSONDecodeError, ValueError):
+            # Let tenacity retry on these
+            raise
         except Exception as e:
             logger.error(f"Error during Gemini threat analysis: {e}")
             raise
@@ -119,19 +152,56 @@ class VanguardAIAgent:
         return analysis
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enhanced Demo — Multiple Attack Scenarios
+# ═══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    sample_malicious_log = (
-        '203.0.113.195 - - [29/Aug/2026:22:15:30 +0700] "GET /api/v1/users?id=1%27%20UNION%20SELECT%20null,username,password%20FROM%20users-- HTTP/1.1" '
-        '403 512 "-" "sqlmap/1.7.2#stable (https://sqlmap.org)"'
-    )
+    SAMPLE_LOGS = [
+        {
+            "label": "SQL Injection (sqlmap)",
+            "log": (
+                '203.0.113.195 - - [29/Aug/2026:22:15:30 +0700] '
+                '"GET /api/v1/users?id=1%27%20UNION%20SELECT%20null,username,password%20FROM%20users-- HTTP/1.1" '
+                '403 512 "-" "sqlmap/1.7.2#stable (https://sqlmap.org)"'
+            ),
+        },
+        {
+            "label": "Reflected XSS Probe",
+            "log": (
+                '198.51.100.42 - - [29/Aug/2026:22:18:05 +0700] '
+                '"GET /search?q=%3Cscript%3Ealert(document.cookie)%3C%2Fscript%3E HTTP/1.1" '
+                '403 256 "https://evil.example.com/" "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"'
+            ),
+        },
+        {
+            "label": "Path Traversal / LFI",
+            "log": (
+                '192.0.2.77 - - [29/Aug/2026:22:20:44 +0700] '
+                '"GET /static/../../../etc/passwd HTTP/1.1" '
+                '403 0 "-" "Nikto/2.5.0"'
+            ),
+        },
+    ]
 
-    print("=== Testing Vanguard Autonomous SOC Agent ===")
+    print("=" * 72)
+    print("  Vanguard Autonomous SOC Agent — Multi-Scenario Demo")
+    print("=" * 72)
+
     try:
         agent = VanguardAIAgent()
-        print(f"\n Input Log:\n{sample_malicious_log}")
-        
-        result = agent.process_and_mitigate(sample_malicious_log)
-        print(f"\n Agent Decision Output:\n{json.dumps(result, indent=2)}")
-        
+
+        for idx, scenario in enumerate(SAMPLE_LOGS, start=1):
+            print(f"\n{'─' * 72}")
+            print(f"  Scenario {idx}/{len(SAMPLE_LOGS)}: {scenario['label']}")
+            print(f"{'─' * 72}")
+            print(f"  Log:\n  {scenario['log']}\n")
+
+            result = agent.process_and_mitigate(scenario["log"])
+            print(f"  Agent Decision:\n{json.dumps(result, indent=4)}")
+
+        print(f"\n{'=' * 72}")
+        print("  All scenarios processed successfully.")
+        print(f"{'=' * 72}")
+
     except Exception as err:
         print(f"\nExecution Error: {err}")

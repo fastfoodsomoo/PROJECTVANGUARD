@@ -15,6 +15,7 @@ requests>=2.28
 # Component 3: Stress Tester
 aiohttp>=3.9
 
-# Component 2: Autonomous AI SOC Agent
+# Component 4: Autonomous AI SOC Agent
 google-genai>=0.1.1
 google-cloud-firestore>=2.16.0
+tenacity>=8.2
