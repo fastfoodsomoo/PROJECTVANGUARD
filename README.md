@@ -85,6 +85,7 @@ bash setup.sh
 เพื่อให้ระบบ Autonomous SOC ทำงานได้สมบูรณ์ จำเป็นต้องตั้งค่า API: 
 ```bash
 export GEMINI_API_KEY="ใส่_GEMINI_API_KEY_ของคุณที่นี่"
+# เอา key ได้ที่ https://aistudio.google.com/api-keys
 # (ตัวเลือกเสริม) สำหรับบันทึกข้อมูล Threat Intelligence ขึ้น Cloud
 export GOOGLE_APPLICATION_CREDENTIALS="gcp-key.json"
 ```
